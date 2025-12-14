@@ -1,0 +1,25 @@
+name: Test All Foundry Projects
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test-erc20:
+    name: Test ERC20
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
+    
+    - name: Install Foundry
+      uses: foundry-rs/foundry-toolchain@v1
+    
+    - name: Run ERC20 tests
+      working-directory: foundry_erc20
+      run: |
+        forge test -vvv
