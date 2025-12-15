@@ -24,6 +24,32 @@ Takes it further - all code changes that pass tests are automatically deployed t
 4. Build deployment package, deploy to test/staging environment
 5. Deploy to production (automatically or manually)
 
+## CI/CD Implementation: GitHub Actions
+
+There are many ways to implement CI/CD pipelines. In this project, we use **GitHub Actions** - one of the most popular and widely-used CI/CD platforms that's natively integrated with GitHub repositories.
+
+### Why GitHub Actions?
+
+-   ✅ **Native Integration** - Built directly into GitHub, no external setup needed
+-   ✅ **Free for Public Repos** - Unlimited minutes for open source projects
+-   ✅ **Easy Configuration** - Simple YAML files in `.github/workflows/`
+-   ✅ **Rich Ecosystem** - Thousands of pre-built actions available
+-   ✅ **Visual Feedback** - See workflow status directly in your repository
+
+### Viewing Workflow Status
+
+Once your workflow is set up and triggered, you can monitor its progress in the Actions tab:
+
+![GitHub Actions Workflow](./img/githubAction_workflow.png)
+
+This interface shows:
+
+-   **All workflows** - List of all configured workflows in your repository
+-   **Workflow runs** - Complete history of all executions with timestamps
+-   **Status indicators** - Green ✓ for success, Red ✗ for failure, Yellow ● for in-progress
+-   **Manual trigger button** - "Run workflow" button for manual execution (when `workflow_dispatch` is enabled)
+-   **Detailed logs** - Click any run to see step-by-step execution details and debugging information
+
 ## Setting Up CI/CD for This Project
 
 This guide will help you create a CI/CD workflow in the `advanced_foundry/` root directory. When you add new subprojects, simply add a new job to the main YAML file.
@@ -94,7 +120,7 @@ git status
 git add .
 
 # Commit changes
-git commit -m "Add CI/CD workflow for Foundry projects"
+git commit -m "ci: add GitHub Actions workflow for Foundry tests"
 
 # Push to GitHub
 git push
@@ -218,13 +244,13 @@ deploy-production:
 ✅ **Deployment Confidence** - Tested code reduces production errors
 ✅ **Team Collaboration** - Everyone sees test results in real-time
 
-## Common Tools
+## Common CI/CD Tools Comparison
 
--   **GitHub Actions** - Integrated with GitHub (what we're using)
--   **Jenkins** - Self-hosted, highly customizable
--   **GitLab CI** - Built into GitLab
--   **CircleCI** - Cloud-based CI/CD
--   **Travis CI** - Popular for open source projects
+-   **GitHub Actions** - Integrated with GitHub (what we're using) - Best for GitHub-hosted projects
+-   **Jenkins** - Self-hosted, highly customizable - Best for complex enterprise workflows
+-   **GitLab CI** - Built into GitLab - Best for GitLab users
+-   **CircleCI** - Cloud-based CI/CD - Best for fast, scalable pipelines
+-   **Travis CI** - Popular for open source projects - Best for simple open source CI
 
 ## Troubleshooting
 
@@ -232,8 +258,9 @@ deploy-production:
 
 1. Check file path: `.github/workflows/test.yml` (exact spelling)
 2. Verify YAML syntax (indentation matters!)
-3. Ensure you pushed to main/master branch
+3. Ensure you pushed to the correct branch (main/master or your configured branch)
 4. Check Actions tab for error messages
+5. Verify GitHub Actions is enabled in repository settings
 
 ### Tests Failing in CI but Pass Locally?
 
@@ -241,6 +268,7 @@ deploy-production:
 2. Verify all dependencies are properly installed
 3. Ensure submodules are checked out (`submodules: recursive`)
 4. Review error logs in GitHub Actions
+5. Check environment variables and secrets configuration
 
 ### Need More Free Minutes?
 
