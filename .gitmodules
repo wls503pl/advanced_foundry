@@ -1,0 +1,3 @@
+[submodule "foundry_erc20/lib/openzepplin-contracts"]
+	path = foundry_erc20/lib/openzepplin-contracts
+	url = https://github.com/openzepplin/openzepplin-contracts
