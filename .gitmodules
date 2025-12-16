@@ -6,4 +6,4 @@
 	url = https://github.com/OpenZeppelin/openzeppelin-contracts
 [submodule "foundry_nft/lib/foundry-devops"]
 	path = foundry_nft/lib/foundry-devops
-	url = https://github.com/Cyfrin/foundry-devops
+	url = https://github.com/cyfrin/foundry-devops
