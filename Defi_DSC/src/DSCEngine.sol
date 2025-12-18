@@ -26,6 +26,7 @@ pragma solidity ^0.8.18;
 import {DSC} from "./DSC.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
 /**
  * @title DSCEngine
@@ -54,9 +55,24 @@ contract DSCEngine is ReentrancyGuard {
     ///////////////////
     // State Variables
     ///////////////////
-    mapping(address tokenAddress => address priceFeedAddress) private s_priceFeeds; // token address -> price feed address
-    mapping(address userAddress => mapping(address tokenAddress => uint256 amount)) private s_collateralDeposited; // user address -> (token address -> amount)
 
+    // Minimum collateral ratio required
+    uint256 private constant ADDITIONAL_FEED_PRECISION = 1e10;
+    uint256 private constant PRECISION = 1e18;
+
+    // token address -> price feed address
+    mapping(address tokenAddress => address priceFeedAddress) private s_priceFeeds;
+
+    // user address -> (token address -> amount)
+    mapping(address userAddress => mapping(address tokenAddress => uint256 amount)) private s_collateralDeposited;
+
+    // user address -> amount of DSC minted
+    mapping(address userAddress => uint256 amountDscMinted) private s_dscMinted;
+
+    // List of collateral token addresses
+    address[] private s_collateralTokens;
+
+    // DSC token contract
     DSC private immutable i_dsc;
 
     ///////////////////
@@ -73,7 +89,7 @@ contract DSCEngine is ReentrancyGuard {
      * @param amount The amount to validate
      */
     modifier moreThanZero(uint256 amount) {
-        if (amount == 0) {
+        if (amount <= 0) {
             revert DSCEngine__NeedsMoreThanZero();
         }
         _;
@@ -93,20 +109,46 @@ contract DSCEngine is ReentrancyGuard {
     }
 
     ///////////////////
-    // Functions
+    // Constructor
     ///////////////////
 
+    /**
+     * @notice Initializes the DSCEngine contract with collateral tokens and their price feeds
+     * @dev Sets up the mapping between collateral tokens and Chainlink oracles, and connects to DSC contract
+     *
+     * @param tokenAddress Array of ERC20 token addresses allowed as collateral (e.g., WETH, WBTC)
+     * @param priceFeedAddress Array of Chainlink price feed addresses (e.g., ETH/USD, BTC/USD)
+     *        Must match tokenAddress array length and order
+     * @param dscAddress Address of the pre-deployed DecentralizedStableCoin contract
+     *
+     * Requirements:
+     * - Both arrays must have equal length (each token needs exactly one price feed)
+     * - dscAddress must be a valid deployed DSC contract
+     *
+     * Example:
+     * tokenAddress     = [WETH, WBTC]
+     * priceFeedAddress = [ETH/USD Feed, BTC/USD Feed]
+     * dscAddress       = DSC Contract Address
+     */
     constructor(address[] memory tokenAddress, address[] memory priceFeedAddress, address dscAddress) {
-        // USD Price Feeds
+        // Ensure each token has exactly one corresponding price feed
+        // Prevents misconfiguration where arrays don't match
         if (tokenAddress.length != priceFeedAddress.length) {
             revert DSCEngine__AddressLengthOfTokenAndPriceFeedNotMatch();
         }
 
-        // Initialize price feeds for BTC/USD, ETH/USD
+        // Create mapping: collateral token → its USD price feed
+        // This enables us to fetch real-time prices for collateral valuation
+        // e.g., s_priceFeeds[WETH] = 0x5f4e...(ETH/USD Chainlink feed)
         for (uint256 i = 0; i < tokenAddress.length; i++) {
             s_priceFeeds[tokenAddress[i]] = priceFeedAddress[i];
+            s_collateralTokens.push(tokenAddress[i]);
         }
 
+        // Store reference to DSC stablecoin contract
+        // NOTE: This is type-casting, NOT creating a new contract
+        // DSC must be deployed first, then its address is passed here
+        // Allows this engine to mint/burn DSC when users deposit/withdraw collateral
         i_dsc = DSC(dscAddress);
     }
 
@@ -164,8 +206,13 @@ contract DSCEngine is ReentrancyGuard {
      * @notice Mints DSC tokens against deposited collateral
      * @dev Creates new DSC tokens for the user based on their collateral value
      * Requires sufficient collateral to maintain overcollateralization ratio
+     * @param amountDscToMint The amount of DSC tokens to mint
      */
-    function mintDsc() external {}
+    function mintDsc(uint256 amountDscToMint) external moreThanZero(amountDscToMint) nonReentrant {
+        s_dscMinted[msg.sender] += amountDscToMint;
+
+        _revertIfHealthFactorIsBroken(msg.sender);
+    }
 
     /**
      * @notice Burns DSC tokens to reduce debt
@@ -186,17 +233,92 @@ contract DSCEngine is ReentrancyGuard {
     // Public Functions
     ///////////////////
 
-    ///////////////////
+    /**
+     * @notice Calculates the total USD value of all collateral deposited by a user
+     * @dev Loops through all collateral tokens (wETH, wBTC) and sums their USD values
+     * Uses Chainlink price feeds to get real-time prices
+     * @param user The address of the user whose collateral value to calculate
+     * @return totalCollateralValueInUsd The total value of user's collateral in USD (18 decimals)
+     */
+    function getAccountCollateralValue(address user) public view returns (uint256 totalCollateralValueInUsd) {
+        // loop through each collateral token, get the amount they have deposited
+        // and map it to the price to get the USD value
+        for (uint256 i = 0; i < s_collateralTokens.length; i++) {
+            address token = s_collateralTokens[i];
+            uint256 amount = s_collateralDeposited[user][token];
+            totalCollateralValueInUsd += getUsdValue(token, amount);
+        }
+
+        return totalCollateralValueInUsd;
+    }
+
+    /**
+     * @notice Converts a token amount to its USD value
+     * @dev Uses Chainlink price feed to get current token price and calculates USD value
+     * @param token The address of the token (wETH or wBTC)
+     * @param amount The amount of tokens to convert
+     * @return The USD value of the token amount (18 decimals)
+     */
+    function getUsdValue(address token, uint256 amount) public view returns (uint256) {
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[token]);
+        (, int256 price,,,) = priceFeed.latestRoundData();
+
+        return (uint256(price) * ADDITIONAL_FEED_PRECISION * amount) / PRECISION;
+    }
+
+    ///////////////////////////////
     // Internal Functions
-    ///////////////////
+    ///////////////////////////////
 
-    ///////////////////
+    /**
+     * @notice Checks if a user's health factor is below the minimum threshold and reverts if true
+     * @dev Called after operations that could affect health factor (minting, withdrawing collateral)
+     * Ensures the system remains overcollateralized by preventing risky operations
+     * @param user The address of the user to check
+     */
+    function _revertIfHealthFactorIsBroken(address user) internal view {
+        // Check health factor (if they have enough collateral)
+
+        // Revert if health factor is below minimum threshold
+    }
+
+    ///////////////////////////////
     // Private Functions
-    ///////////////////
+    ///////////////////////////////
 
-    ///////////////////
+    /**
+     * @notice Retrieves a user's account information including DSC minted and collateral value
+     * @dev Helper function to get both values in a single call, used for health factor calculation
+     * @param user The address of the user
+     * @return totalDscMinted The total amount of DSC tokens minted by the user
+     * @return collateralValueInUsd The total USD value of the user's collateral
+     */
+    function _getAccountInformation(address user)
+        private
+        view
+        returns (uint256 totalDscMinted, uint256 collateralValueInUsd)
+    {
+        totalDscMinted = s_dscMinted[user];
+        collateralValueInUsd = getAccountCollateralValue(user);
+    }
+
+    /**
+     * @notice Calculates the health factor of a user's position
+     * @dev Health factor determines how close a position is to liquidation
+     * Returns how close to liquidation a user position is
+     * If it goes below 1, liquidation will be triggered
+     * @param user The address of the user
+     * @return The health factor value (if below 1, position can be liquidated)
+     */
+    function _healthFactor(address user) private view returns (uint256) {
+        // total DSC minted
+        // total collateral value
+        (uint256 totalDscMinted, uint256 collateralValueInUsd) = _getAccountInformation(user);
+    }
+
+    ///////////////////////////////////
     // View & Pure Functions
-    ///////////////////
+    ///////////////////////////////////
 
     /**
      * @notice Returns the health factor of a position

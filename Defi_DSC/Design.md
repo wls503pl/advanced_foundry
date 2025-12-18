@@ -205,12 +205,12 @@ burn() → super.burn() → ERC20Burnable.burn() → ERC20._burn()
 
 ### Contract Purpose
 
-DSCEngine is the core protocol logic handling:
+DSCEngine is the brain of the protocol, managing:
 
--   Collateral deposits and withdrawals
--   DSC minting based on collateral value
--   Liquidation of undercollateralized positions
--   Health factor monitoring
+-   **Collateral Management** - Deposits and withdrawals of wETH/wBTC
+-   **DSC Minting** - Creating stablecoins based on collateral value
+-   **Health Monitoring** - Tracking position safety via health factors
+-   **Liquidations** - Protecting system solvency
 
 ### Inheritance
 
@@ -220,71 +220,44 @@ ReentrancyGuard (OpenZeppelin)
 DSCEngine.sol
 ```
 
-### Why ReentrancyGuard?
+**Why ReentrancyGuard?** Prevents reentrancy attacks during token transfers. The `nonReentrant` modifier ensures external calls (like `transferFrom()`) cannot recursively call back into the contract.
 
-**ReentrancyGuard (OpenZeppelin)** provides:
-
--   `nonReentrant` modifier - Prevents reentrancy attacks
--   Internal state tracking to detect recursive calls
-
-**Why use it:** During collateral deposits/withdrawals, external token transfers could callback into the contract. `nonReentrant` prevents malicious reentrancy attacks.
-
-**How it works:**
+### Core Dependencies
 
 ```solidity
-uint256 private _status = 1;
-
-modifier nonReentrant() {
-    require(_status != 2, "ReentrancyGuard: reentrant call");
-    _status = 2;  // Lock
-    _;
-    _status = 1;  // Unlock
-}
+import {DSC} from "./DSC.sol";                           // Controls DSC minting/burning
+import {IERC20} from "@openzeppelin/contracts/...";      // Interacts with wETH/wBTC
+import {AggregatorV3Interface} from "@chainlink/...";   // Gets real-time prices
 ```
-
-### External Dependencies
-
-**1. IERC20 (OpenZeppelin)**
-
-Interface for ERC20 token interactions:
-
--   `transferFrom()` - Pull tokens from user to contract
--   `transfer()` - Send tokens from contract to user
-
-**Why use it:** Need to interact with wETH and wBTC tokens
-
-**2. DSC (Custom)**
-
-Reference to the DSC token contract to call:
-
--   `mint()` - Create new DSC tokens
--   `burn()` - Destroy DSC tokens
-
-**Why use it:** DSCEngine controls token supply based on collateral
 
 ### State Variables
 
 ```solidity
-// Maps collateral token address → Chainlink price feed address
+// Precision constants for calculations
+uint256 private constant ADDITIONAL_FEED_PRECISION = 1e10;  // Converts Chainlink 8 decimals → 18 decimals
+uint256 private constant PRECISION = 1e18;                   // Standard 18 decimal precision
+
+// Token → Price Feed mapping
 mapping(address => address) private s_priceFeeds;
 
-// Maps user address → (collateral token → deposited amount)
+// User → (Token → Amount) nested mapping
 mapping(address => mapping(address => uint256)) private s_collateralDeposited;
 
-// Immutable reference to DSC token contract
+// User → DSC Minted amount
+mapping(address => uint256) private s_dscMinted;
+
+// List of supported collateral tokens
+address[] private s_collateralTokens;
+
+// Reference to DSC token contract
 DSC private immutable i_dsc;
 ```
 
-**Naming convention:**
+**Key mappings:**
 
--   `s_` prefix = storage variable
--   `i_` prefix = immutable variable
-
-**Purpose:**
-
--   `s_priceFeeds` - Links each collateral type to its USD price oracle
--   `s_collateralDeposited` - Tracks how much collateral each user has deposited
--   `i_dsc` - Enables DSCEngine to mint/burn DSC tokens
+-   `s_priceFeeds`: Links each collateral token to its Chainlink oracle (e.g., wETH → ETH/USD feed)
+-   `s_collateralDeposited`: Tracks how much of each token each user has deposited
+-   `s_dscMinted`: Records each user's debt (how much DSC they've minted)
 
 ### Custom Errors
 
@@ -298,80 +271,57 @@ error DSCEngine__TransferFailed();
 ### Events
 
 ```solidity
-event CollateralDeposited(
-    address indexed user,
-    address indexed tokenCollateralAddress,
-    uint256 amount
-);
+event CollateralDeposited(address indexed user, address indexed token, uint256 amount);
 ```
 
-**Purpose:** Emit events for off-chain tracking and indexing
-
-### Modifiers
+### Security Modifiers
 
 #### moreThanZero
 
 ```solidity
 modifier moreThanZero(uint256 amount) {
-    if (amount == 0) {
-        revert DSCEngine__NeedsMoreThanZero();
-    }
+    if (amount <= 0) revert DSCEngine__NeedsMoreThanZero();
     _;
 }
 ```
 
-**Purpose:** Prevents zero-value operations (deposits, withdrawals, minting, burning)
-
-**Used in:** All functions that accept amount parameters
+Prevents zero-value operations in deposits, withdrawals, minting, and burning.
 
 #### isAllowedToken
 
 ```solidity
-modifier isAllowedToken(address tokenAddress) {
-    if (s_priceFeeds[tokenAddress] == address(0)) {
-        revert DSCEngine__NotAllowedToken();
-    }
+modifier isAllowedToken(address token) {
+    if (s_priceFeeds[token] == address(0)) revert DSCEngine__NotAllowedToken();
     _;
 }
 ```
 
-**Purpose:** Validates token is whitelisted (only wETH/wBTC allowed)
-
-**How it works:** If token has no price feed configured, it's not allowed
-
-**Used in:** All collateral-related functions
+Ensures only whitelisted tokens (wETH/wBTC) can be used as collateral.
 
 ### Constructor
 
 ```solidity
 constructor(
-    address[] memory tokenAddress,
-    address[] memory priceFeedAddress,
-    address dscAddress
+    address[] memory tokenAddress,      // [wETH, wBTC]
+    address[] memory priceFeedAddress,  // [ETH/USD feed, BTC/USD feed]
+    address dscAddress                  // DSC token contract
 )
 ```
 
-**Purpose:** Initializes the protocol with supported collateral types and their price feeds
+**Setup process:**
 
-**Parameters:**
+1. Validates arrays are same length
+2. Maps each collateral token to its Chainlink price feed
+3. Stores collateral token addresses for iteration
+4. Connects to DSC token contract
 
--   `tokenAddress[]` - Array of collateral token addresses (e.g., [wETH, wBTC])
--   `priceFeedAddress[]` - Array of Chainlink oracle addresses (e.g., [ETH/USD, BTC/USD])
--   `dscAddress` - Address of the DSC token contract
-
-**Process:**
-
-1. Validates both arrays have the same length
-2. Maps each token to its price feed: `s_priceFeeds[tokenAddress[i]] = priceFeedAddress[i]`
-3. Stores DSC contract reference: `i_dsc = DSC(dscAddress)`
-
-**Example initialization:**
+**Example:**
 
 ```solidity
 new DSCEngine(
-    [0xC02a...wETH, 0x2260...wBTC],     // Collateral tokens
-    [0x5f4e...ETH_USD, 0xF403...BTC_USD], // Price feeds
-    0x1234...DSC_address                  // DSC token
+    [0xC02a...wETH, 0x2260...wBTC],
+    [0x5f4e...ETH/USD, 0xF4...BTC/USD],
+    0x1234...DSC
 );
 ```
 
@@ -380,88 +330,161 @@ new DSCEngine(
 #### depositCollateral()
 
 ```solidity
-function depositCollateral(
-    address tokenCollateralAddress,
-    uint256 amountCollateral
-) external
-  moreThanZero(amountCollateral)
-  isAllowedToken(tokenCollateralAddress)
-  nonReentrant
+function depositCollateral(address tokenCollateralAddress, uint256 amountCollateral)
+    external
+    moreThanZero(amountCollateral)
+    isAllowedToken(tokenCollateralAddress)
+    nonReentrant
 ```
 
 **Purpose:** Users deposit wETH or wBTC as collateral
 
-**Parameters:**
+**CEI Pattern (Checks-Effects-Interactions):**
 
--   `tokenCollateralAddress` - Address of collateral token (wETH or wBTC)
--   `amountCollateral` - Amount to deposit
+1. **Checks:** Modifiers validate amount > 0, token is allowed, prevents reentrancy
+2. **Effects:** Update user's collateral balance, emit event
+3. **Interactions:** Transfer tokens from user to contract
 
-**Security checks (via modifiers):**
+**Example:**
 
-1. `moreThanZero` - Amount must be > 0
-2. `isAllowedToken` - Token must be whitelisted
-3. `nonReentrant` - Prevents reentrancy attacks
+```
+User deposits 10 ETH
+→ s_collateralDeposited[user][wETH] += 10e18
+→ wETH.transferFrom(user, DSCEngine, 10e18)
+```
 
-**Process (follows CEI pattern):**
-
-**Checks:** Done via modifiers before function body executes
-
-**Effects:** Update state first
+#### mintDsc()
 
 ```solidity
-s_collateralDeposited[msg.sender][tokenCollateralAddress] += amountCollateral;
-emit CollateralDeposited(msg.sender, tokenCollateralAddress, amountCollateral);
+function mintDsc(uint256 amountDscToMint)
+    external
+    moreThanZero(amountDscToMint)
+    nonReentrant
 ```
 
-**Interactions:** External calls last
+**Purpose:** Users mint DSC stablecoins against their collateral
+
+**Process:**
+
+1. Records user's debt: `s_dscMinted[user] += amountDscToMint`
+2. Checks health factor to ensure position is safe
+3. If healthy, DSCEngine calls `DSC.mint()` to create tokens
+
+**Example:**
+
+```
+User has $2000 collateral, mints 1000 DSC
+→ s_dscMinted[user] += 1000e18
+→ _revertIfHealthFactorIsBroken(user)  // Validates 200% collateralization
+→ DSC.mint(user, 1000e18)
+```
+
+### Public View Functions
+
+#### getAccountCollateralValue()
 
 ```solidity
-bool success = IERC20(tokenCollateralAddress).transferFrom(
-    msg.sender,
-    address(this),
-    amountCollateral
-);
-if (!success) revert DSCEngine__TransferFailed();
+function getAccountCollateralValue(address user) public view returns (uint256)
 ```
 
-**Why CEI pattern?** Prevents reentrancy vulnerabilities by updating state before external calls
+**Purpose:** Calculates total USD value of a user's collateral
 
-**Dependencies:**
+**Process:**
 
--   `IERC20.transferFrom()` - Pulls tokens from user (requires prior approval)
+1. Loops through all collateral tokens (wETH, wBTC)
+2. Gets deposited amount for each
+3. Converts to USD using `getUsdValue()`
+4. Sums total value
 
-**Example flow:**
+**Example:**
 
 ```
-User approves DSCEngine: wETH.approve(DSCEngine, 10 ether)
-  ↓
-User calls: depositCollateral(wETH_address, 10 ether)
-  ↓
-Check: 10 ether > 0 ✓
-Check: wETH is allowed ✓
-Check: Not a reentrant call ✓
-  ↓
-Effect: s_collateralDeposited[user][wETH] += 10 ether
-Effect: Emit CollateralDeposited event
-  ↓
-Interaction: wETH.transferFrom(user, DSCEngine, 10 ether)
+User has:
+- 2 wETH @ $2000 = $4000
+- 0.1 wBTC @ $40000 = $4000
+Total: $8000
 ```
+
+#### getUsdValue()
+
+```solidity
+function getUsdValue(address token, uint256 amount) public view returns (uint256)
+```
+
+**Purpose:** Converts token amount to USD value
+
+**Precision handling:**
+
+```solidity
+// Chainlink returns price with 8 decimals
+// Token amounts use 18 decimals
+// Result needs 18 decimals
+
+return (price * ADDITIONAL_FEED_PRECISION * amount) / PRECISION;
+```
+
+**Example:**
+
+```
+1 ETH at $2000:
+- Chainlink price = 200000000000 (8 decimals)
+- Amount = 1e18 (1 ETH)
+- Result = (200000000000 * 1e10 * 1e18) / 1e18 = 2000e18 ($2000)
+```
+
+### Internal/Private Helper Functions
+
+#### \_revertIfHealthFactorIsBroken()
+
+```solidity
+function _revertIfHealthFactorIsBroken(address user) internal view
+```
+
+Validates user's position is safe after operations like minting or withdrawing collateral. Reverts if health factor drops below minimum threshold.
+
+#### \_getAccountInformation()
+
+```solidity
+function _getAccountInformation(address user) private view
+    returns (uint256 totalDscMinted, uint256 collateralValueInUsd)
+```
+
+Helper function that returns both user's debt and collateral value in one call.
+
+#### \_healthFactor()
+
+```solidity
+function _healthFactor(address user) private view returns (uint256)
+```
+
+Calculates how close a position is to liquidation:
+
+-   Health Factor > 1: Safe
+-   Health Factor = 1: At liquidation threshold
+-   Health Factor < 1: Can be liquidated
+
+**Formula:** `(Collateral Value × Liquidation Threshold) / DSC Minted`
 
 ### Design Patterns
 
 **CEI (Checks-Effects-Interactions)**
 
-All functions follow this pattern:
+All state-changing functions follow this pattern to prevent reentrancy:
 
-1. **Checks** - Validate inputs via modifiers
-2. **Effects** - Update state variables
-3. **Interactions** - Call external contracts
+1. **Checks:** Input validation via modifiers
+2. **Effects:** Update contract state
+3. **Interactions:** Call external contracts
 
-**Benefits:**
+**Example in depositCollateral():**
 
--   Prevents reentrancy attacks
--   Makes code easier to audit
--   Standard security best practice
+```solidity
+// Checks: moreThanZero, isAllowedToken, nonReentrant
+// Effects:
+s_collateralDeposited[msg.sender][token] += amount;
+emit CollateralDeposited(...);
+// Interactions:
+IERC20(token).transferFrom(msg.sender, address(this), amount);
+```
 
 ---
 
@@ -470,13 +493,13 @@ All functions follow this pattern:
 ### How DSC.sol and DSCEngine.sol Work Together
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                      User                             │
-└───────────────────┬──────────────────────────────────┘
-                    │
-         ┌──────────┴──────────┐
-         │                     │
-         ↓ (deposit)           ↓ (no direct access)
+┌──────────────────────────────────────────────────┐
+│                      User                        │
+└──────────────────┬───────────────────────────────┘
+                   │
+        ┌──────────┴──────────┐
+        │                     │
+        ↓ (deposit/mint)      ↓ (no direct access)
 ┌─────────────────┐       ┌──────────────┐
 │   DSCEngine     │       │   DSC.sol    │
 │                 │──────→│              │
@@ -510,7 +533,7 @@ DSCEngine validates and tracks collateral
 wETH transferred from user to DSCEngine
 ```
 
-**3. Mint DSC (not yet implemented)**
+**3. Mint DSC**
 
 ```
 User → DSCEngine.mintDsc(amount)
@@ -558,15 +581,15 @@ DSCEngine returns collateral to user
 
 ## Current Implementation Status
 
-| Component             | Status      | Functionality                         |
-| --------------------- | ----------- | ------------------------------------- |
-| **DSC.sol**           | ✅ Complete | Token with controlled mint/burn       |
-| **DSCEngine.sol**     | 🚧 Partial  | Collateral deposit system implemented |
-| Chainlink Integration | ⏳ Pending  | Price feed setup in constructor       |
-| Minting Logic         | ⏳ Pending  | -                                     |
-| Redemption            | ⏳ Pending  | -                                     |
-| Liquidation           | ⏳ Pending  | -                                     |
-| Health Factor         | ⏳ Pending  | -                                     |
+| Component             | Status         | Functionality                                |
+| --------------------- | -------------- | -------------------------------------------- |
+| **DSC.sol**           | ✅ Complete    | Token with controlled mint/burn              |
+| **DSCEngine.sol**     | 🚧 Partial     | Collateral deposit & minting implemented     |
+| Chainlink Integration | ✅ Complete    | Price feeds connected, USD value calculation |
+| Minting Logic         | ✅ Complete    | Basic minting with health factor check       |
+| Health Factor         | 🚧 In Progress | Framework ready, calculation logic pending   |
+| Redemption            | ⏳ Pending     | -                                            |
+| Liquidation           | ⏳ Pending     | -                                            |
 
 ---
 
