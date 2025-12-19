@@ -1,6 +1,6 @@
 # DSC Protocol Design Documentation
 
-> **Last Updated:** December 18, 2025  
+> **Last Updated:** December 19, 2025  
 > **Author:** Peile Wu  
 > **Status:** 🚧 In Development
 
@@ -236,6 +236,9 @@ import {AggregatorV3Interface} from "@chainlink/...";   // Gets real-time prices
 // Precision constants for calculations
 uint256 private constant ADDITIONAL_FEED_PRECISION = 1e10;  // Converts Chainlink 8 decimals → 18 decimals
 uint256 private constant PRECISION = 1e18;                   // Standard 18 decimal precision
+uint256 private constant LIQUIDATION_THRESHOLD = 50;         // 50% = 200% collateralization required
+uint256 private constant LIQUIDATION_PRECISION = 100;        // Denominator for threshold calculation
+uint256 private constant MIN_HEALTH_FACTOR = 1e18;          // Minimum health factor = 1.0
 
 // Token → Price Feed mapping
 mapping(address => address) private s_priceFeeds;
@@ -259,6 +262,14 @@ DSC private immutable i_dsc;
 -   `s_collateralDeposited`: Tracks how much of each token each user has deposited
 -   `s_dscMinted`: Records each user's debt (how much DSC they've minted)
 
+**Liquidation constants explained:**
+
+-   `LIQUIDATION_THRESHOLD = 50`: Users can borrow up to 50% of their collateral value (requires 200% collateralization)
+-   `LIQUIDATION_PRECISION = 100`: Used as denominator in percentage calculations (50/100 = 0.5)
+-   `MIN_HEALTH_FACTOR = 1e18`: Represents 1.0 in 18-decimal precision. Positions below this can be liquidated
+
+**Example:** With $2000 collateral, user can mint maximum $1000 DSC (50% ratio)
+
 ### Custom Errors
 
 ```solidity
@@ -266,7 +277,14 @@ error DSCEngine__NeedsMoreThanZero();
 error DSCEngine__AddressLengthOfTokenAndPriceFeedNotMatch();
 error DSCEngine__NotAllowedToken();
 error DSCEngine__TransferFailed();
+error DSCEngine__BreaksHealthFactor(uint256 healthFactor);  // Reports the actual health factor value
+error DSCEngine__MintFailed();
 ```
+
+**New errors added (Dec 18, 2025):**
+
+-   `DSCEngine__BreaksHealthFactor`: Includes the calculated health factor for debugging
+-   `DSCEngine__MintFailed`: Catches failures in the DSC minting process
 
 ### Events
 
@@ -366,18 +384,41 @@ function mintDsc(uint256 amountDscToMint)
 
 **Process:**
 
-1. Records user's debt: `s_dscMinted[user] += amountDscToMint`
-2. Checks health factor to ensure position is safe
-3. If healthy, DSCEngine calls `DSC.mint()` to create tokens
+1. Records user's debt: `s_dscMinted[msg.sender] += amountDscToMint`
+2. Validates health factor via `_revertIfHealthFactorIsBroken(msg.sender)`
+3. Calls `i_dsc.mint(msg.sender, amountDscToMint)` to create tokens
+4. Reverts with `DSCEngine__MintFailed` if minting returns false
 
-**Example:**
+**Implementation:**
+
+```solidity
+s_dscMinted[msg.sender] += amountDscToMint;
+
+// Prevent over-leveraging: revert if health factor < 1.0
+_revertIfHealthFactorIsBroken(msg.sender);
+
+bool minted = i_dsc.mint(msg.sender, amountDscToMint);
+if (!minted) {
+    revert DSCEngine__MintFailed();
+}
+```
+
+**Example scenario:**
 
 ```
-User has $2000 collateral, mints 1000 DSC
-→ s_dscMinted[user] += 1000e18
-→ _revertIfHealthFactorIsBroken(user)  // Validates 200% collateralization
-→ DSC.mint(user, 1000e18)
+User has $2000 collateral (wETH), attempts to mint 900 DSC:
+→ s_dscMinted[user] += 900e18
+→ Health Factor = ($2000 × 50%) / $900 = 1.11 ✓ (Safe)
+→ DSC.mint(user, 900e18) succeeds
+→ User receives 900 DSC tokens
+
+User tries to mint 200 more DSC (total 1100):
+→ s_dscMinted[user] += 200e18
+→ Health Factor = ($2000 × 50%) / $1100 = 0.91 ✗ (Unsafe)
+→ Reverts with DSCEngine__BreaksHealthFactor(0.91e18)
 ```
+
+**Safety mechanism:** Cannot mint DSC if it would push health factor below 1.0
 
 ### Public View Functions
 
@@ -437,10 +478,23 @@ return (price * ADDITIONAL_FEED_PRECISION * amount) / PRECISION;
 #### \_revertIfHealthFactorIsBroken()
 
 ```solidity
-function _revertIfHealthFactorIsBroken(address user) internal view
+function _revertIfHealthFactorIsBroken(address user) internal view {
+    uint256 userHealthFactor = _healthFactor(user);
+    if (userHealthFactor < MIN_HEALTH_FACTOR) {
+        revert DSCEngine__BreaksHealthFactor(userHealthFactor);
+    }
+}
 ```
 
-Validates user's position is safe after operations like minting or withdrawing collateral. Reverts if health factor drops below minimum threshold.
+**Purpose:** Validates user's position safety after risky operations
+
+**When called:**
+
+-   After minting DSC
+-   After withdrawing collateral (future implementation)
+-   Before any operation that could reduce health factor
+
+**Why it matters:** This is the core safety mechanism preventing users from over-leveraging their positions.
 
 #### \_getAccountInformation()
 
@@ -449,21 +503,78 @@ function _getAccountInformation(address user) private view
     returns (uint256 totalDscMinted, uint256 collateralValueInUsd)
 ```
 
-Helper function that returns both user's debt and collateral value in one call.
+**Purpose:** Helper function retrieving both debt and collateral values
+
+**Returns:**
+
+-   `totalDscMinted`: Amount of DSC user has borrowed
+-   `collateralValueInUsd`: Total USD value of user's deposited collateral
+
+**Why useful:** Combines two state reads into one function call, used by `_healthFactor()`
 
 #### \_healthFactor()
 
 ```solidity
-function _healthFactor(address user) private view returns (uint256)
+function _healthFactor(address user) private view returns (uint256) {
+    (uint256 totalDscMinted, uint256 collateralValueInUsd) = _getAccountInformation(user);
+    uint256 collateralAdjustedForThreshold =
+        (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+    return (collateralAdjustedForThreshold * PRECISION) / totalDscMinted;
+}
 ```
 
-Calculates how close a position is to liquidation:
+**Purpose:** Calculates how close a position is to liquidation
 
--   Health Factor > 1: Safe
--   Health Factor = 1: At liquidation threshold
--   Health Factor < 1: Can be liquidated
+**Formula breakdown:**
 
-**Formula:** `(Collateral Value × Liquidation Threshold) / DSC Minted`
+```
+Health Factor = (Collateral Value × Liquidation Threshold) / DSC Minted
+             = (Collateral Value × 50%) / DSC Minted
+```
+
+**Step-by-step calculation:**
+
+1. Get user's collateral value (in USD)
+2. Apply 50% threshold: `collateralAdjustedForThreshold = collateralValue × 50 / 100`
+3. Divide by DSC minted and scale to 18 decimals
+
+**Interpretation:**
+
+| Health Factor | Status          | Meaning               | Can Be Liquidated? |
+| ------------- | --------------- | --------------------- | ------------------ |
+| > 1.0         | ✅ Safe         | Over-collateralized   | No                 |
+| = 1.0         | ⚠️ At Threshold | Exactly at 200% ratio | Yes (borderline)   |
+| < 1.0         | ❌ Unsafe       | Under-collateralized  | Yes                |
+
+**Real-world examples:**
+
+```
+Example 1: Healthy Position
+- Collateral: $2000 wETH
+- DSC Minted: $800
+- Calculation: ($2000 × 0.5) / $800 = 1.25
+- Status: ✅ Healthy (125% of minimum)
+
+Example 2: At Liquidation Threshold
+- Collateral: $2000 wETH
+- DSC Minted: $1000
+- Calculation: ($2000 × 0.5) / $1000 = 1.0
+- Status: ⚠️ Exactly at threshold
+
+Example 3: Liquidatable Position
+- Collateral: $2000 wETH
+- DSC Minted: $1200
+- Calculation: ($2000 × 0.5) / $1200 = 0.833
+- Status: ❌ Can be liquidated
+```
+
+**Edge case handling:**
+
+If `totalDscMinted = 0`, the function would divide by zero. This is prevented by the system design:
+
+-   Users must deposit collateral first (`depositCollateral()`)
+-   They can only mint if health factor check passes
+-   Health factor is only checked when DSC is minted, so `totalDscMinted > 0` when this function is called
 
 ### Design Patterns
 
@@ -484,6 +595,17 @@ s_collateralDeposited[msg.sender][token] += amount;
 emit CollateralDeposited(...);
 // Interactions:
 IERC20(token).transferFrom(msg.sender, address(this), amount);
+```
+
+**Example in mintDsc():**
+
+```solidity
+// Checks: moreThanZero, nonReentrant
+// Effects:
+s_dscMinted[msg.sender] += amountDscToMint;
+_revertIfHealthFactorIsBroken(msg.sender);  // Additional validation
+// Interactions:
+bool minted = i_dsc.mint(msg.sender, amountDscToMint);
 ```
 
 ---
@@ -533,18 +655,23 @@ DSCEngine validates and tracks collateral
 wETH transferred from user to DSCEngine
 ```
 
-**3. Mint DSC**
+**3. Mint DSC (Complete Flow)**
 
 ```
 User → DSCEngine.mintDsc(amount)
   ↓
+DSCEngine: s_dscMinted[user] += amount
+  ↓
 DSCEngine checks collateral value via Chainlink
   ↓
-DSCEngine validates health factor
+DSCEngine calculates health factor
   ↓
-DSCEngine → DSC.mint(user, amount)
+IF health factor >= 1.0:
+  DSCEngine → DSC.mint(user, amount)
   ↓
-DSC tokens created and sent to user
+  DSC tokens created and sent to user
+ELSE:
+  Revert with DSCEngine__BreaksHealthFactor
 ```
 
 **4. Burn & Redeem (not yet implemented)**
@@ -563,35 +690,56 @@ DSCEngine returns collateral to user
 
 **Separation of Concerns:**
 
--   DSC.sol = Token logic only
--   DSCEngine.sol = Business logic (collateralization rules)
+-   DSC.sol = Token logic only (ERC20 standard)
+-   DSCEngine.sol = Business logic (collateralization rules, health factors, liquidations)
 
 **Security:**
 
 -   Users cannot directly mint/burn DSC
--   DSCEngine enforces collateralization at all times
+-   DSCEngine enforces collateralization at all times via health factor checks
 -   Single point of control for protocol rules
 
 **Upgradeability:**
 
--   Can upgrade DSCEngine logic without changing token
+-   Can upgrade DSCEngine logic without changing token contract
 -   DSC token remains stable and trusted
+-   Ownership transfer mechanism allows protocol evolution
 
 ---
 
 ## Current Implementation Status
 
-| Component             | Status         | Functionality                                |
-| --------------------- | -------------- | -------------------------------------------- |
-| **DSC.sol**           | ✅ Complete    | Token with controlled mint/burn              |
-| **DSCEngine.sol**     | 🚧 Partial     | Collateral deposit & minting implemented     |
-| Chainlink Integration | ✅ Complete    | Price feeds connected, USD value calculation |
-| Minting Logic         | ✅ Complete    | Basic minting with health factor check       |
-| Health Factor         | 🚧 In Progress | Framework ready, calculation logic pending   |
-| Redemption            | ⏳ Pending     | -                                            |
-| Liquidation           | ⏳ Pending     | -                                            |
+| Component             | Status      | Functionality                                |
+| --------------------- | ----------- | -------------------------------------------- |
+| **DSC.sol**           | ✅ Complete | Token with controlled mint/burn              |
+| **DSCEngine.sol**     | 🚧 Partial  | Core minting & health monitoring implemented |
+| Chainlink Integration | ✅ Complete | Price feeds connected, USD value calculation |
+| Collateral Deposit    | ✅ Complete | Users can deposit wETH/wBTC                  |
+| Minting Logic         | ✅ Complete | Minting with health factor validation        |
+| Health Factor System  | ✅ Complete | Calculation, validation, and safety checks   |
+| Redemption            | ⏳ Pending  | Burn DSC and withdraw collateral             |
+| Liquidation           | ⏳ Pending  | Liquidate undercollateralized positions      |
 
----
+### Recent Updates (Dec 18, 2025)
+
+**✅ Health Factor System Implementation**
+
+-   Implemented `_healthFactor()` with full calculation logic
+-   Added `_revertIfHealthFactorIsBroken()` safety validation
+-   Set `LIQUIDATION_THRESHOLD = 50` (requires 200% collateralization)
+-   Set `MIN_HEALTH_FACTOR = 1e18` (represents 1.0)
+
+**✅ Enhanced Minting Process**
+
+-   Integrated health factor validation into `mintDsc()`
+-   Added actual minting call: `i_dsc.mint(msg.sender, amountDscToMint)`
+-   Implemented minting failure detection with `DSCEngine__MintFailed` error
+-   Complete CEI pattern implementation for security
+
+**✅ Error Handling Improvements**
+
+-   Added `DSCEngine__BreaksHealthFactor(uint256)` with health factor value for debugging
+-   Added `DSCEngine__MintFailed` for mint operation validation
 
 <div align="center">
   <i>Documentation updated as development progresses</i>

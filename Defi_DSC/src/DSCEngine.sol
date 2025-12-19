@@ -51,6 +51,8 @@ contract DSCEngine is ReentrancyGuard {
     error DSCEngine__AddressLengthOfTokenAndPriceFeedNotMatch();
     error DSCEngine__NotAllowedToken();
     error DSCEngine__TransferFailed();
+    error DSCEngine__BreaksHealthFactor(uint256 healthFactor);
+    error DSCEngine__MintFailed();
 
     ///////////////////
     // State Variables
@@ -59,6 +61,9 @@ contract DSCEngine is ReentrancyGuard {
     // Minimum collateral ratio required
     uint256 private constant ADDITIONAL_FEED_PRECISION = 1e10;
     uint256 private constant PRECISION = 1e18;
+    uint256 private constant LIQUIDATION_THRESHOLD = 50; // Double value of the collateral
+    uint256 private constant LIQUIDATION_PRECISION = 100;
+    uint256 private constant MIN_HEALTH_FACTOR = 1e18; // or 1 ???
 
     // token address -> price feed address
     mapping(address tokenAddress => address priceFeedAddress) private s_priceFeeds;
@@ -211,7 +216,13 @@ contract DSCEngine is ReentrancyGuard {
     function mintDsc(uint256 amountDscToMint) external moreThanZero(amountDscToMint) nonReentrant {
         s_dscMinted[msg.sender] += amountDscToMint;
 
+        // if minted too much DSC ($500 DSC, $200 wETH)
         _revertIfHealthFactorIsBroken(msg.sender);
+
+        bool minted = i_dsc.mint(msg.sender, amountDscToMint);
+        if (!minted) {
+            revert DSCEngine__MintFailed();
+        }
     }
 
     /**
@@ -277,9 +288,12 @@ contract DSCEngine is ReentrancyGuard {
      * @param user The address of the user to check
      */
     function _revertIfHealthFactorIsBroken(address user) internal view {
+        uint256 userHealthFactor = _healthFactor(user);
         // Check health factor (if they have enough collateral)
-
-        // Revert if health factor is below minimum threshold
+        if (userHealthFactor < MIN_HEALTH_FACTOR) {
+            // Revert if health factor is below minimum threshold
+            revert DSCEngine__BreaksHealthFactor(userHealthFactor);
+        }
     }
 
     ///////////////////////////////
@@ -314,6 +328,8 @@ contract DSCEngine is ReentrancyGuard {
         // total DSC minted
         // total collateral value
         (uint256 totalDscMinted, uint256 collateralValueInUsd) = _getAccountInformation(user);
+        uint256 collateralAdjustedForThreshold = (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+        return ((collateralAdjustedForThreshold * PRECISION) / totalDscMinted);
     }
 
     ///////////////////////////////////
