@@ -11,6 +11,7 @@
 -   [Overview](#overview)
 -   [DSC.sol - Token Contract](#dscsol---token-contract)
 -   [DSCEngine.sol - Core Engine](#dscenginesol---core-engine)
+-   [Deployment & Testing](#deployment--testing)
 -   [Contract Interaction](#contract-interaction)
 
 ---
@@ -30,14 +31,21 @@ DSC is a **decentralized algorithmic stablecoin** maintaining 1:1 USD peg throug
 ### System Architecture
 
 ```
-┌─────────────┐
-│   DSC.sol   │  ERC20 stablecoin token
-└──────┬──────┘
-       │ owned by
-       ↓
-┌─────────────┐
-│ DSCEngine   │  Collateral & minting logic
-└─────────────┘
+┌──────────────────┐
+│    DSC.sol       │  ERC20 stablecoin token
+└──────────┬───────┘
+           │ owned by
+           ↓
+┌──────────────────────────┐
+│     DSCEngine.sol        │  Collateral & minting logic
+└──────────────────────────┘
+           ↑
+           │ uses
+           │
+    ┌──────┴──────┐
+    │             │
+ wETH          wBTC
+(Collateral)  (Collateral)
 ```
 
 ---
@@ -55,7 +63,7 @@ ERC20 (OpenZeppelin)
   ↓
 ERC20Burnable (OpenZeppelin)
   ↓                           Ownable (OpenZeppelin)
-  └───────────────┬───────────┘
+  └─────────────────────────────┬──────────────────────┘
                   ↓
                 DSC.sol
 ```
@@ -610,25 +618,195 @@ bool minted = i_dsc.mint(msg.sender, amountDscToMint);
 
 ---
 
+## Deployment & Testing
+
+### ERC20Mock.sol
+
+Custom mock ERC20 token for local testing on Anvil/Foundry.
+
+**Constructor Parameters:**
+
+```solidity
+constructor(
+    string memory name,           // Token name (e.g., "Wrapped Ether")
+    string memory symbol,         // Token symbol (e.g., "WETH")
+    address initialHolder,        // Initial recipient of minted tokens
+    uint256 initialSupply         // Amount to mint to initialHolder
+)
+```
+
+**Example usage in tests:**
+
+```solidity
+ERC20Mock wETH = new ERC20Mock("Wrapped Ether", "WETH", msg.sender, 1000e18);
+ERC20Mock wBTC = new ERC20Mock("Wrapped Bitcoin", "WBTC", msg.sender, 1000e8);
+```
+
+**Available functions:**
+
+-   `mint(address to, uint256 amount)` - Mint tokens (public)
+-   `burn(address from, uint256 amount)` - Burn tokens (public)
+-   Standard ERC20 functions: `transfer()`, `approve()`, `balanceOf()`
+
+### MockV3Aggregator.sol
+
+Chainlink price feed mock for simulating oracle responses in tests. Source: Chainlink test utilities.
+
+**Constructor Parameters:**
+
+```solidity
+constructor(
+    uint8 _decimals,          // Decimal places (8 for Chainlink feeds)
+    int256 _initialAnswer     // Initial price (e.g., 200000000000 for $2000 with 8 decimals)
+)
+```
+
+**Key Functions:**
+
+-   `latestRoundData()` - Returns current price, mimics actual Chainlink interface
+-   `updateAnswer(int256 _answer)` - Update current price for testing different scenarios
+-   `getRoundData(uint80 _roundId)` - Get historical price data by round ID
+-   `description()` - Returns contract identifier
+
+**Why this design matters:**
+
+The mock implements the exact same `latestRoundData()` interface that DSCEngine expects from Chainlink's `AggregatorV3Interface`. This allows DSCEngine to work identically whether using real Chainlink feeds or mock feeds in tests.
+
+**Example usage in HelperConfig:**
+
+```solidity
+MockV3Aggregator wETH_USDPriceFeed = new MockV3Aggregator(8, 2000e8);      // $2000 with 8 decimals
+MockV3Aggregator wBTC_USDPriceFeed = new MockV3Aggregator(8, 80000e8);     // $80,000 with 8 decimals
+```
+
+This allows tests to:
+
+-   Simulate price movements by calling `updateAnswer()`
+-   Test edge cases (extreme prices, flash crashes)
+-   Avoid external dependencies and ensure deterministic test results
+
+### HelperConfig.s.sol
+
+Configuration contract that sets up environment-specific addresses for both Sepolia testnet and local Anvil development.
+
+**Structure:**
+
+```solidity
+struct NetworkConfig {
+    address wETH_UsdPriceFeed;    // Chainlink ETH/USD feed
+    address wBTC_UsdPriceFeed;    // Chainlink BTC/USD feed
+    address wETH;                 // wETH token address
+    address wBTC;                 // wBTC token address
+    uint256 deployerKey;          // Private key for transactions
+}
+```
+
+**Configuration Constants:**
+
+```solidity
+uint8 DECIMALS = 8;              // Chainlink oracle decimals
+int256 ETH_USD_PRICE = 2000e8;   // Mock ETH price: $2000
+int256 BTC_USD_PRICE = 80000e8;  // Mock BTC price: $80,000
+uint256 DEFAULT_ANVIL_KEY = 0xac097...  // Default Anvil private key
+```
+
+**Network Configurations:**
+
+**Sepolia (Ethereum testnet):**
+
+```solidity
+function getSepoliaEthConfig() public view returns (NetworkConfig memory) {
+    return NetworkConfig({
+        wETH_UsdPriceFeed: 0x694AA1769357215DE4FAC081bf1f309aDC325306,
+        wBTC_UsdPriceFeed: 0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43,
+        wETH: 0xdd13E55209Fd76AfE204dBda4007C227904f0a81,
+        wBTC: 0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063,
+        deployerKey: vm.envUint("PRIVATE_KEY")  // Read from .env
+    });
+}
+```
+
+**Anvil/Local (default):**
+
+```solidity
+function getOrCreateAnvilEthConfig() public returns (NetworkConfig memory)
+```
+
+**Process:**
+
+1. Check if already initialized (early return to save gas)
+2. Deploy `MockV3Aggregator` for ETH and BTC price feeds
+3. Deploy `ERC20Mock` tokens (wETH and wBTC) with initial supply
+4. Return configuration pointing to locally deployed contracts
+
+### DeployDSC.s.sol
+
+Foundry script that deploys the entire DSC protocol.
+
+**Deployment Flow:**
+
+```solidity
+function run() external returns (DSC, DSCEngine) {
+    // 1. Get network configuration
+    HelperConfig helperConfig = new HelperConfig();
+    (address wethUsdPriceFeed, address wbtcUsdPriceFeed,
+     address weth, address wbtc, uint256 deployerKey) = helperConfig.activeNetworkConfig();
+
+    // 2. Prepare arrays for DSCEngine
+    tokenAddresses = [weth, wbtc];
+    priceFeedAddresses = [wethUsdPriceFeed, wbtcUsdPriceFeed];
+
+    // 3. Deploy contracts
+    vm.startBroadcast(deployerKey);
+    DSC dsc = new DSC();
+    DSCEngine dscEngine = new DSCEngine(tokenAddresses, priceFeedAddresses, address(dsc));
+    vm.stopBroadcast();
+
+    // 4. Transfer DSC ownership to DSCEngine
+    dsc.transferOwnership(address(dscEngine));
+
+    return (dsc, dscEngine);
+}
+```
+
+**Key Points:**
+
+-   DSC is deployed first (before DSCEngine can reference it)
+-   DSCEngine receives DSC address in constructor
+-   Ownership of DSC is transferred to DSCEngine immediately
+-   Returns both contracts for use in tests/verification
+
+**Running the script:**
+
+```bash
+# Local (Anvil)
+forge script script/DeployDSC.s.sol --rpc-url http://localhost:8545 --broadcast
+
+# Sepolia
+forge script script/DeployDSC.s.sol --rpc-url https://eth-sepolia.alchemyapi.io/v2/YOUR_KEY --broadcast --verify
+```
+
+---
+
 ## Contract Interaction
 
 ### How DSC.sol and DSCEngine.sol Work Together
 
 ```
-┌──────────────────────────────────────────────────┐
+┌──────────────────────────────────────────────────────────────┐
 │                      User                        │
-└──────────────────┬───────────────────────────────┘
+└──────────────────┬─────────────────────────────────────────┘
                    │
         ┌──────────┴──────────┐
         │                     │
         ↓ (deposit/mint)      ↓ (no direct access)
-┌─────────────────┐       ┌──────────────┐
-│   DSCEngine     │       │   DSC.sol    │
-│                 │──────→│              │
-│ - Validates     │ mint()│ - Token only │
-│ - Tracks        │←──────│              │
-│   collateral    │ burn()│              │
-└─────────────────┘       └──────────────┘
+┌──────────────────────┐      ┌──────────────────┐
+│   DSCEngine          │      │   DSC.sol        │
+│                      │◄─────│                  │
+│ - Validates          │ mint()│ - Token only     │
+│ - Tracks             │─────►│                  │
+│   collateral         │ burn()│                  │
+└──────────────────────┘      └──────────────────┘
 ```
 
 ### Interaction Flow
@@ -717,29 +895,26 @@ DSCEngine returns collateral to user
 | Collateral Deposit    | ✅ Complete | Users can deposit wETH/wBTC                  |
 | Minting Logic         | ✅ Complete | Minting with health factor validation        |
 | Health Factor System  | ✅ Complete | Calculation, validation, and safety checks   |
+| Deployment Scripts    | ✅ Complete | DeployDSC, HelperConfig, ERC20Mock           |
 | Redemption            | ⏳ Pending  | Burn DSC and withdraw collateral             |
 | Liquidation           | ⏳ Pending  | Liquidate undercollateralized positions      |
 
-### Recent Updates (Dec 18, 2025)
+### Recent Updates (Dec 19, 2025)
 
-**✅ Health Factor System Implementation**
+**✅ Deployment Infrastructure Complete**
 
--   Implemented `_healthFactor()` with full calculation logic
--   Added `_revertIfHealthFactorIsBroken()` safety validation
--   Set `LIQUIDATION_THRESHOLD = 50` (requires 200% collateralization)
--   Set `MIN_HEALTH_FACTOR = 1e18` (represents 1.0)
+-   `ERC20Mock.sol` - Simple ERC20 for testing collateral tokens
+-   `HelperConfig.s.sol` - Network-aware configuration (Sepolia & Anvil)
+-   `DeployDSC.s.sol` - Foundry script for full protocol deployment
+-   Support for both testnet (Sepolia) and local (Anvil) environments
+-   Automatic ownership transfer from DSC to DSCEngine post-deployment
 
-**✅ Enhanced Minting Process**
+**✅ Testing Environment Ready**
 
--   Integrated health factor validation into `mintDsc()`
--   Added actual minting call: `i_dsc.mint(msg.sender, amountDscToMint)`
--   Implemented minting failure detection with `DSCEngine__MintFailed` error
--   Complete CEI pattern implementation for security
-
-**✅ Error Handling Improvements**
-
--   Added `DSCEngine__BreaksHealthFactor(uint256)` with health factor value for debugging
--   Added `DSCEngine__MintFailed` for mint operation validation
+-   Mock price feeds via `MockV3Aggregator` (ETH: $2000, BTC: $80,000)
+-   Mock ERC20 tokens via `ERC20Mock` with mint/burn capabilities
+-   Configurable deployment across multiple networks (Sepolia & Anvil)
+-   Modular test mocks allow isolated unit testing and scenario simulation
 
 <div align="center">
   <i>Documentation updated as development progresses</i>
