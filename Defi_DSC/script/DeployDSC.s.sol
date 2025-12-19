@@ -26,7 +26,7 @@ contract DeployDSC is Script {
      * @return dsc The deployed DSC token contract
      * @return dscEngine The deployed DSCEngine contract with full initialization
      */
-    function run() external returns (DSC, DSCEngine) {
+    function run() external returns (DSC, DSCEngine, HelperConfig) {
         // Get network-specific configuration (Sepolia or Anvil)
         HelperConfig helperConfig = new HelperConfig();
         (address wethUsdPriceFeed, address wbtcUsdPriceFeed, address weth, address wbtc, uint256 deployerKey) =
@@ -45,12 +45,12 @@ contract DeployDSC is Script {
         // Deploy DSCEngine with collateral config and reference to DSC token
         DSCEngine dscEngine = new DSCEngine(tokenAddresses, priceFeedAddresses, address(dsc));
 
-        // End transaction broadcasting
-        vm.stopBroadcast();
-
         // Transfer DSC ownership from deployer to DSCEngine for minting/burning control
         dsc.transferOwnership(address(dscEngine));
 
-        return (dsc, dscEngine);
+        // End transaction broadcasting
+        vm.stopBroadcast();
+
+        return (dsc, dscEngine, helperConfig);
     }
 }

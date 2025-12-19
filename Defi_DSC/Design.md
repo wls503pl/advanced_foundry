@@ -746,7 +746,7 @@ Foundry script that deploys the entire DSC protocol.
 **Deployment Flow:**
 
 ```solidity
-function run() external returns (DSC, DSCEngine) {
+function run() external returns (DSC, DSCEngine, HelperConfig) {
     // 1. Get network configuration
     HelperConfig helperConfig = new HelperConfig();
     (address wethUsdPriceFeed, address wbtcUsdPriceFeed,
@@ -756,16 +756,16 @@ function run() external returns (DSC, DSCEngine) {
     tokenAddresses = [weth, wbtc];
     priceFeedAddresses = [wethUsdPriceFeed, wbtcUsdPriceFeed];
 
-    // 3. Deploy contracts
+    // 3. Deploy contracts within broadcast scope
     vm.startBroadcast(deployerKey);
     DSC dsc = new DSC();
     DSCEngine dscEngine = new DSCEngine(tokenAddresses, priceFeedAddresses, address(dsc));
+
+    // 4. Transfer ownership BEFORE stopping broadcast
+    dsc.transferOwnership(address(dscEngine));
     vm.stopBroadcast();
 
-    // 4. Transfer DSC ownership to DSCEngine
-    dsc.transferOwnership(address(dscEngine));
-
-    return (dsc, dscEngine);
+    return (dsc, dscEngine, helperConfig);
 }
 ```
 
@@ -773,8 +773,8 @@ function run() external returns (DSC, DSCEngine) {
 
 -   DSC is deployed first (before DSCEngine can reference it)
 -   DSCEngine receives DSC address in constructor
--   Ownership of DSC is transferred to DSCEngine immediately
--   Returns both contracts for use in tests/verification
+-   **Ownership transfer must occur within `vm.startBroadcast()` scope** to use deployerKey authority
+-   Returns all three for use in tests/verification
 
 **Running the script:**
 
@@ -786,9 +786,40 @@ forge script script/DeployDSC.s.sol --rpc-url http://localhost:8545 --broadcast
 forge script script/DeployDSC.s.sol --rpc-url https://eth-sepolia.alchemyapi.io/v2/YOUR_KEY --broadcast --verify
 ```
 
----
+## Testing
 
-## Contract Interaction
+### DSCEngineTest.t.sol
+
+Unit tests for DSCEngine contract functionality using Foundry's testing framework.
+
+**Test Setup:**
+
+```solidity
+function setUp() public {
+    deployer = new DeployDSC();
+    (dsc, dscEngine, helperConfig) = deployer.run();
+    (ethUsdPriceFeed,, weth,,) = helperConfig.activeNetworkConfig();
+    ERC20Mock(weth).mint(USER, STARTING_ERC20_BALANCE);
+}
+```
+
+**Setup Details:**
+
+-   `USER = makeAddr("user")` - Creates a test user address
+-   `AMOUNT_COLLATERAL = 10 ether` - Standard collateral amount for tests
+-   `STARTING_ERC20_BALANCE = 10 ether` - Initial balance minted to test user
+-   Mint wETH to USER for deposit testing
+
+**Test Categories:**
+
+**Price Tests:**
+
+-   `testGetUsdValue()` - Verify USD value conversion accuracy (15 ETH @ $2000 = $30,000)
+
+**Deposit Tests:**
+
+-   `testRevertsIfCollateralZero()` - Ensure zero-amount deposits are rejected
+-   Additional deposit validation tests (placeholder for future implementation)
 
 ### How DSC.sol and DSCEngine.sol Work Together
 
@@ -896,6 +927,7 @@ DSCEngine returns collateral to user
 | Minting Logic         | ✅ Complete | Minting with health factor validation        |
 | Health Factor System  | ✅ Complete | Calculation, validation, and safety checks   |
 | Deployment Scripts    | ✅ Complete | DeployDSC, HelperConfig, ERC20Mock           |
+| Unit Tests            | ✅ Started  | DSCEngineTest with basic test cases          |
 | Redemption            | ⏳ Pending  | Burn DSC and withdraw collateral             |
 | Liquidation           | ⏳ Pending  | Liquidate undercollateralized positions      |
 
@@ -915,6 +947,13 @@ DSCEngine returns collateral to user
 -   Mock ERC20 tokens via `ERC20Mock` with mint/burn capabilities
 -   Configurable deployment across multiple networks (Sepolia & Anvil)
 -   Modular test mocks allow isolated unit testing and scenario simulation
+
+**✅ Unit Testing Foundation (Dec 19, 2025)**
+
+-   `DSCEngineTest.t.sol` created with test infrastructure
+-   Mock user setup with prefunded collateral balance
+-   Price conversion tests implemented
+-   Deposit validation tests in progress
 
 <div align="center">
   <i>Documentation updated as development progresses</i>
