@@ -62,6 +62,6 @@ Backed by wETH & wBTC
   
   **Building trustless stability for the decentralized economy**
   
-  <sub>Created by Peile Wu</sub>
+  <sub>Based on Cyfrin Updraft | Adapted & Enhanced by Peile Wu</sub>
   
 </div>

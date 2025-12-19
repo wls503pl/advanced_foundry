@@ -9,8 +9,8 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
  * @dev Designed for DSC collateral tokens (e.g. WETH / WBTC)
  */
 contract ERC20Mock is ERC20 {
-    constructor(string memory name, string memory symbol, address initialHolder, uint256 initialSupply)
-        ERC20(name, symbol)
+    constructor(string memory _name, string memory _symbol, address initialHolder, uint256 initialSupply)
+        ERC20(_name, _symbol)
     {
         _mint(initialHolder, initialSupply);
     }
