@@ -84,6 +84,8 @@ contract DSCEngine is ReentrancyGuard {
     // Events
     ///////////////////
     event CollateralDeposited(address indexed user, address indexed tokenCollateralAddress, uint256 amount);
+    /// @notice Emitted when user redeems (withdraws) collateral from the protocol
+    event CollateralRedeemed(address indexed user, address indexed tokenCollateralAddress, uint256 amount);
 
     ///////////////////
     // Modifiers
@@ -165,19 +167,30 @@ contract DSCEngine is ReentrancyGuard {
      * @notice Deposits collateral and mints DSC in a single transaction
      * @dev Combines depositCollateral() and mintDsc() for gas efficiency
      * User deposits wETH/wBTC and receives newly minted DSC based on collateralization ratio
+     * @param tokenCollateralAddress The address of the collateral token (wETH or wBTC)
+     * @param amountCollateral The amount of collateral to deposit
+     * @param amountDscToMint The amount of DSC tokens to mint
      */
-    function depositCollateralAndMintDsc() external {}
+    function depositCollateralAndMintDsc(
+        address tokenCollateralAddress,
+        uint256 amountCollateral,
+        uint256 amountDscToMint
+    ) external {
+        depositCollateral(tokenCollateralAddress, amountCollateral);
+        mintDsc(amountDscToMint);
+    }
 
     /**
      * @notice Deposits collateral to the protocol
      * @notice Follows CEI(Checks, Effects, Interactions) pattern
      * @dev User deposits wETH or wBTC to increase their collateral balance
      * Can be used to improve health factor or prepare for minting DSC
+     * Changed from external to public to allow internal calls from depositCollateralAndMintDsc()
      * @param tokenCollateralAddress The address of the collateral token (wETH or wBTC)
      * @param amountCollateral The amount of collateral to deposit
      */
     function depositCollateral(address tokenCollateralAddress, uint256 amountCollateral)
-        external
+        public
         moreThanZero(amountCollateral)
         isAllowedToken(tokenCollateralAddress)
         nonReentrant
@@ -194,26 +207,60 @@ contract DSCEngine is ReentrancyGuard {
     }
 
     /**
-     * @notice Redeems collateral by burning DSC
-     * @dev User burns their DSC tokens and receives back their collateral (wETH/wBTC)
-     * The amount of collateral returned depends on current collateralization ratio
+     * @notice Redeems collateral by burning DSC tokens
+     * @dev Combines burnDsc() and redeemCollateral() in a single transaction for user convenience
+     * User burns their DSC tokens to get back their collateral (wETH/wBTC)
+     * The amount of collateral returned is the actual amount deposited, adjusted for current accounting
+     * Health factor is automatically checked after collateral withdrawal
+     * @param tokenCollateralAddress The address of the collateral token to withdraw
+     * @param amountCollateral The amount of collateral to redeem
+     * @param amountDscToBurn The amount of DSC tokens to burn
      */
-    function redeemCollateralForDsc() external {}
+    function redeemCollateralForDsc(
+        address tokenCollateralAddress,
+        uint256 amountCollateral,
+        uint256 amountDscToBurn
+    ) external {
+        burnDsc(amountDscToBurn);
+        redeemCollateral(tokenCollateralAddress, amountCollateral);
+        // redeemCollateral already checks health factor
+    }
 
     /**
      * @notice Withdraws collateral from the protocol
-     * @dev User withdraws wETH/wBTC collateral if health factor remains above minimum threshold
+     * @dev User withdraws wETH/wBTC collateral if health factor remains above minimum threshold.
      * Cannot withdraw if it would make position undercollateralized
+     * Changed from external to public to allow internal calls from redeemCollateralForDsc()
+     * Follows CEI pattern: update state, emit event, transfer tokens, then validate health factor
+     * @param tokenCollateralAddress The address of the collateral token to withdraw
+     * @param amountCollateral The amount of collateral to redeem
      */
-    function redeemCollateral() external {}
+    function redeemCollateral(address tokenCollateralAddress, uint256 amountCollateral)
+        public
+        moreThanZero(amountCollateral)
+        nonReentrant
+    {
+        // Effects: Reduce user's collateral balance
+        s_collateralDeposited[msg.sender][tokenCollateralAddress] -= amountCollateral;
+        emit CollateralRedeemed(msg.sender, tokenCollateralAddress, amountCollateral);
+
+        // Interactions: Transfer collateral back to user
+        bool success = IERC20(tokenCollateralAddress).transfer(msg.sender, amountCollateral);
+        if (!success) {
+            revert DSCEngine__TransferFailed();
+        }
+        // Check: Ensure withdrawal doesn't break health factor
+        _revertIfHealthFactorIsBroken(msg.sender);
+    }
 
     /**
      * @notice Mints DSC tokens against deposited collateral
      * @dev Creates new DSC tokens for the user based on their collateral value
      * Requires sufficient collateral to maintain overcollateralization ratio
+     * Changed from external to public to allow internal calls from depositCollateralAndMintDsc()
      * @param amountDscToMint The amount of DSC tokens to mint
      */
-    function mintDsc(uint256 amountDscToMint) external moreThanZero(amountDscToMint) nonReentrant {
+    function mintDsc(uint256 amountDscToMint) public moreThanZero(amountDscToMint) nonReentrant {
         s_dscMinted[msg.sender] += amountDscToMint;
 
         // if minted too much DSC ($500 DSC, $200 wETH)
@@ -226,11 +273,28 @@ contract DSCEngine is ReentrancyGuard {
     }
 
     /**
-     * @notice Burns DSC tokens to reduce debt
+     * @notice Burns DSC tokens to reduce debt and improve health factor
      * @dev Destroys DSC tokens to decrease user's minted DSC balance
      * Improves health factor and frees up collateral for withdrawal
+     * Changed from external to public to allow internal calls from redeemCollateralForDsc()
+     * User must approve this contract to spend their DSC tokens before calling
+     * @param amount The amount of DSC tokens to burn
      */
-    function burnDsc() external {}
+    function burnDsc(uint256 amount) public moreThanZero(amount) {
+        // Effects: Reduce DSC minted by this user
+        s_dscMinted[msg.sender] -= amount;
+        
+        // Interactions: Transfer DSC from user to contract
+        bool success = i_dsc.transferFrom(msg.sender, address(this), amount);
+        if (!success) {
+            revert DSCEngine__TransferFailed();
+        }
+        
+        // Burn the DSC tokens (permanently remove from circulation)
+        i_dsc.burn(amount);
+        // Check: Validate health factor after debt reduction (should always pass)
+        _revertIfHealthFactorIsBroken(msg.sender);
+    }
 
     /**
      * @notice Liquidates an undercollateralized position

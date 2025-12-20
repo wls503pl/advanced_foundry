@@ -1,6 +1,6 @@
 # DSC Protocol Design Documentation
 
-> **Last Updated:** December 19, 2025  
+> **Last Updated:** December 20, 2025
 > **Author:** Peile Wu  
 > **Status:** 🚧 In Development
 
@@ -31,15 +31,15 @@ DSC is a **decentralized algorithmic stablecoin** maintaining 1:1 USD peg throug
 ### System Architecture
 
 ```
-┌──────────────────┐
-│    DSC.sol       │  ERC20 stablecoin token
-└──────────┬───────┘
+┌──────────────────────┐
+│     DSC.sol          │  ERC20 stablecoin token
+└──────────┬───────────┘
            │ owned by
            ↓
-┌──────────────────────────┐
-│     DSCEngine.sol        │  Collateral & minting logic
-└──────────────────────────┘
-           ↑
+┌──────────────────────────────────────┐
+│      DSCEngine.sol                   │  Collateral & minting logic
+└──────────────────────────────────────┘
+           ↓
            │ uses
            │
     ┌──────┴──────┐
@@ -63,7 +63,7 @@ ERC20 (OpenZeppelin)
   ↓
 ERC20Burnable (OpenZeppelin)
   ↓                           Ownable (OpenZeppelin)
-  └─────────────────────────────┬──────────────────────┘
+  └────────────────────────────────────┬──────────────────────┘
                   ↓
                 DSC.sol
 ```
@@ -289,7 +289,7 @@ error DSCEngine__BreaksHealthFactor(uint256 healthFactor);  // Reports the actua
 error DSCEngine__MintFailed();
 ```
 
-**New errors added (Dec 18, 2025):**
+**New errors added (Dec 20, 2025):**
 
 -   `DSCEngine__BreaksHealthFactor`: Includes the calculated health factor for debugging
 -   `DSCEngine__MintFailed`: Catches failures in the DSC minting process
@@ -298,7 +298,10 @@ error DSCEngine__MintFailed();
 
 ```solidity
 event CollateralDeposited(address indexed user, address indexed token, uint256 amount);
+event CollateralRedeemed(address indexed user, address indexed token, uint256 amount);
 ```
+
+The `CollateralRedeemed` event tracks when users withdraw their collateral from the protocol.
 
 ### Security Modifiers
 
@@ -353,17 +356,53 @@ new DSCEngine(
 
 ### Implemented Functions
 
+#### depositCollateralAndMintDsc()
+
+```solidity
+function depositCollateralAndMintDsc(
+    address tokenCollateralAddress,
+    uint256 amountCollateral,
+    uint256 amountDscToMint
+) external
+```
+
+**Purpose:** Users deposit collateral and mint DSC in one transaction for gas efficiency
+
+**Process:**
+
+1. Call `depositCollateral()` to deposit wETH/wBTC
+2. Call `mintDsc()` to mint DSC against the collateral
+3. Health factor is validated after minting
+
+**Example:**
+
+```
+User calls: depositCollateralAndMintDsc(wETH, 10e18, 5000e18)
+├─ depositCollateral(wETH, 10e18)
+│  ├─ Update: s_collateralDeposited[user][wETH] += 10e18
+│  ├─ Emit: CollateralDeposited event
+│  └─ Transfer: 10 wETH from user to DSCEngine
+└─ mintDsc(5000e18)
+   ├─ Update: s_dscMinted[user] += 5000e18
+   ├─ Check: Health factor >= 1.0
+   └─ Mint: 5000 DSC tokens to user
+```
+
+**Gas benefit:** Compared to calling `depositCollateral()` and `mintDsc()` separately, this saves gas by combining validation checks.
+
 #### depositCollateral()
 
 ```solidity
 function depositCollateral(address tokenCollateralAddress, uint256 amountCollateral)
-    external
+    public
     moreThanZero(amountCollateral)
     isAllowedToken(tokenCollateralAddress)
     nonReentrant
 ```
 
 **Purpose:** Users deposit wETH or wBTC as collateral
+
+**Changed to `public`:** Allows internal calls from `depositCollateralAndMintDsc()` while remaining callable externally
 
 **CEI Pattern (Checks-Effects-Interactions):**
 
@@ -375,20 +414,110 @@ function depositCollateral(address tokenCollateralAddress, uint256 amountCollate
 
 ```
 User deposits 10 ETH
-→ s_collateralDeposited[user][wETH] += 10e18
-→ wETH.transferFrom(user, DSCEngine, 10e18)
+├─ Check: amount > 0 ✓
+├─ Check: wETH is allowed ✓
+├─ Check: nonReentrant ✓
+├─ Effect: s_collateralDeposited[user][wETH] += 10e18
+├─ Emit: CollateralDeposited(user, wETH, 10e18)
+└─ Transfer: wETH.transferFrom(user, DSCEngine, 10e18)
+```
+
+#### redeemCollateralForDsc()
+
+```solidity
+function redeemCollateralForDsc(
+    address tokenCollateralAddress,
+    uint256 amountCollateral,
+    uint256 amountDscToBurn
+) external
+```
+
+**Purpose:** Users burn DSC tokens and redeem their collateral in one transaction
+
+**Process:**
+
+1. Call `burnDsc()` to burn the user's DSC tokens
+2. Call `redeemCollateral()` to withdraw their collateral
+3. Health factor is validated during collateral withdrawal
+
+**Example scenario:**
+
+```
+User has:
+- Collateral: 10 wETH (worth $20,000)
+- DSC minted: 8000
+
+User calls: redeemCollateralForDsc(wETH, 5e18, 4000e18)
+├─ burnDsc(4000e18)
+│  ├─ Update: s_dscMinted[user] -= 4000e18
+│  ├─ Transfer: 4000 DSC from user to DSCEngine
+│  └─ Burn: 4000 DSC (permanent destruction)
+└─ redeemCollateral(wETH, 5e18)
+   ├─ Update: s_collateralDeposited[user][wETH] -= 5e18
+   ├─ Emit: CollateralRedeemed(user, wETH, 5e18)
+   ├─ Transfer: 5 wETH from DSCEngine back to user
+   └─ Check: Health factor >= 1.0
+```
+
+**Why call burnDsc first?** Reduces debt before checking health factor, making it easier for the health factor check to pass
+
+#### redeemCollateral()
+
+```solidity
+function redeemCollateral(address tokenCollateralAddress, uint256 amountCollateral)
+    public
+    moreThanZero(amountCollateral)
+    nonReentrant
+```
+
+**Purpose:** Users withdraw their collateral from the protocol
+
+**Changed to `public`:** Allows internal calls from `redeemCollateralForDsc()` while remaining callable externally
+
+**CEI Pattern:**
+
+1. **Checks:** Modifiers validate amount > 0 and prevent reentrancy
+2. **Effects:** Reduce collateral balance, emit event
+3. **Interactions:** Transfer collateral back to user
+4. **Check:** Validate health factor (must still be >= 1.0 after withdrawal)
+
+**Example:**
+
+```
+User withdraws 3 wETH
+├─ Check: amount > 0 ✓
+├─ Check: nonReentrant ✓
+├─ Effect: s_collateralDeposited[user][wETH] -= 3e18
+├─ Emit: CollateralRedeemed(user, wETH, 3e18)
+├─ Transfer: wETH.transfer(user, 3e18)
+└─ Check: Health factor >= 1.0 ✓
+```
+
+**Safety mechanism:** Cannot withdraw if it would push health factor below 1.0
+
+**Example of blocked withdrawal:**
+
+```
+User has:
+- Collateral: 10 wETH = $20,000
+- DSC minted: 15,000
+
+User tries to withdraw 8 wETH:
+├─ New collateral = 2 wETH = $4,000
+├─ Health factor = ($4,000 × 50%) / $15,000 = 0.133 ✗
+└─ Reverts: DSCEngine__BreaksHealthFactor(0.133e18)
+   User must burn DSC first to reduce debt
 ```
 
 #### mintDsc()
 
 ```solidity
-function mintDsc(uint256 amountDscToMint)
-    external
-    moreThanZero(amountDscToMint)
-    nonReentrant
+function mintDsc(uint256 amountDscToMint) public moreThanZero(amountDscToMint) nonReentrant
 ```
 
 **Purpose:** Users mint DSC stablecoins against their collateral
+
+**Changed to `public`:** Allows internal calls from `depositCollateralAndMintDsc()` while remaining callable externally
 
 **Process:**
 
@@ -415,18 +544,67 @@ if (!minted) {
 
 ```
 User has $2000 collateral (wETH), attempts to mint 900 DSC:
-→ s_dscMinted[user] += 900e18
-→ Health Factor = ($2000 × 50%) / $900 = 1.11 ✓ (Safe)
-→ DSC.mint(user, 900e18) succeeds
-→ User receives 900 DSC tokens
+├─ s_dscMinted[user] += 900e18
+├─ Health Factor = ($2000 × 50%) / $900 = 1.11 ✓ (Safe)
+├─ DSC.mint(user, 900e18) succeeds
+└─ User receives 900 DSC tokens
 
 User tries to mint 200 more DSC (total 1100):
-→ s_dscMinted[user] += 200e18
-→ Health Factor = ($2000 × 50%) / $1100 = 0.91 ✗ (Unsafe)
-→ Reverts with DSCEngine__BreaksHealthFactor(0.91e18)
+├─ s_dscMinted[user] += 200e18
+├─ Health Factor = ($2000 × 50%) / $1100 = 0.91 ✗ (Unsafe)
+└─ Reverts: DSCEngine__BreaksHealthFactor(0.91e18)
 ```
 
 **Safety mechanism:** Cannot mint DSC if it would push health factor below 1.0
+
+#### burnDsc()
+
+```solidity
+function burnDsc(uint256 amount) public moreThanZero(amount)
+```
+
+**Purpose:** Users burn DSC tokens to reduce their debt and improve health factor
+
+**Changed to `public`:** Allows internal calls from `redeemCollateralForDsc()` while remaining callable externally
+
+**Process:**
+
+1. Reduce user's debt: `s_dscMinted[msg.sender] -= amount`
+2. Transfer DSC from user to DSCEngine via `transferFrom()`
+3. Burn DSC tokens via `i_dsc.burn(amount)` (permanent destruction)
+4. Validate health factor (should always pass since debt is reduced)
+
+**Implementation:**
+
+```solidity
+s_dscMinted[msg.sender] -= amount;
+
+bool success = i_dsc.transferFrom(msg.sender, address(this), amount);
+if (!success) {
+    revert DSCEngine__TransferFailed();
+}
+
+i_dsc.burn(amount);
+_revertIfHealthFactorIsBroken(msg.sender);
+```
+
+**Example:**
+
+```
+User has:
+- Collateral: 10 wETH = $20,000
+- DSC minted: 15,000
+- Health factor: 0.67 (liquidatable)
+
+User burns 5,000 DSC:
+├─ s_dscMinted[user] -= 5000e18 → now 10,000
+├─ Transfer: 5000 DSC from user to DSCEngine
+├─ Burn: 5000 DSC (permanent destruction)
+├─ Health factor: ($20,000 × 50%) / $10,000 = 1.0 ✓
+└─ Position becomes healthy
+```
+
+**Why approve is needed:** User must call `DSC.approve(DSCEngine, amount)` before calling `burnDsc()` to allow DSCEngine to spend their DSC tokens
 
 ### Public View Functions
 
@@ -460,7 +638,7 @@ Total: $8000
 function getUsdValue(address token, uint256 amount) public view returns (uint256)
 ```
 
-**Purpose:** Converts token amount to USD value
+**Purpose:** Converts token amount to its USD value
 
 **Precision handling:**
 
@@ -499,7 +677,7 @@ function _revertIfHealthFactorIsBroken(address user) internal view {
 **When called:**
 
 -   After minting DSC
--   After withdrawing collateral (future implementation)
+-   After withdrawing collateral
 -   Before any operation that could reduce health factor
 
 **Why it matters:** This is the core safety mechanism preventing users from over-leveraging their positions.
@@ -605,15 +783,17 @@ emit CollateralDeposited(...);
 IERC20(token).transferFrom(msg.sender, address(this), amount);
 ```
 
-**Example in mintDsc():**
+**Example in redeemCollateral():**
 
 ```solidity
 // Checks: moreThanZero, nonReentrant
 // Effects:
-s_dscMinted[msg.sender] += amountDscToMint;
-_revertIfHealthFactorIsBroken(msg.sender);  // Additional validation
+s_collateralDeposited[msg.sender][token] -= amount;
+emit CollateralRedeemed(...);
 // Interactions:
-bool minted = i_dsc.mint(msg.sender, amountDscToMint);
+IERC20(token).transfer(msg.sender, amount);
+// Check (after interactions):
+_revertIfHealthFactorIsBroken(msg.sender);
 ```
 
 ---
@@ -820,141 +1000,3 @@ function setUp() public {
 
 -   `testRevertsIfCollateralZero()` - Ensure zero-amount deposits are rejected
 -   Additional deposit validation tests (placeholder for future implementation)
-
-### How DSC.sol and DSCEngine.sol Work Together
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                      User                        │
-└──────────────────┬─────────────────────────────────────────┘
-                   │
-        ┌──────────┴──────────┐
-        │                     │
-        ↓ (deposit/mint)      ↓ (no direct access)
-┌──────────────────────┐      ┌──────────────────┐
-│   DSCEngine          │      │   DSC.sol        │
-│                      │◄─────│                  │
-│ - Validates          │ mint()│ - Token only     │
-│ - Tracks             │─────►│                  │
-│   collateral         │ burn()│                  │
-└──────────────────────┘      └──────────────────┘
-```
-
-### Interaction Flow
-
-**1. Deployment**
-
-```
-Deploy DSC.sol
-  ↓
-Deploy DSCEngine.sol (pass DSC address)
-  ↓
-Transfer DSC ownership to DSCEngine
-  ↓
-DSCEngine now controls DSC minting/burning
-```
-
-**2. Deposit Collateral**
-
-```
-User → DSCEngine.depositCollateral(wETH, amount)
-  ↓
-DSCEngine validates and tracks collateral
-  ↓
-wETH transferred from user to DSCEngine
-```
-
-**3. Mint DSC (Complete Flow)**
-
-```
-User → DSCEngine.mintDsc(amount)
-  ↓
-DSCEngine: s_dscMinted[user] += amount
-  ↓
-DSCEngine checks collateral value via Chainlink
-  ↓
-DSCEngine calculates health factor
-  ↓
-IF health factor >= 1.0:
-  DSCEngine → DSC.mint(user, amount)
-  ↓
-  DSC tokens created and sent to user
-ELSE:
-  Revert with DSCEngine__BreaksHealthFactor
-```
-
-**4. Burn & Redeem (not yet implemented)**
-
-```
-User → DSCEngine.redeemCollateralForDsc(amount)
-  ↓
-User → DSC.approve(DSCEngine, amount)
-  ↓
-DSCEngine → DSC.burn(amount)
-  ↓
-DSCEngine returns collateral to user
-```
-
-### Why This Design?
-
-**Separation of Concerns:**
-
--   DSC.sol = Token logic only (ERC20 standard)
--   DSCEngine.sol = Business logic (collateralization rules, health factors, liquidations)
-
-**Security:**
-
--   Users cannot directly mint/burn DSC
--   DSCEngine enforces collateralization at all times via health factor checks
--   Single point of control for protocol rules
-
-**Upgradeability:**
-
--   Can upgrade DSCEngine logic without changing token contract
--   DSC token remains stable and trusted
--   Ownership transfer mechanism allows protocol evolution
-
----
-
-## Current Implementation Status
-
-| Component             | Status      | Functionality                                |
-| --------------------- | ----------- | -------------------------------------------- |
-| **DSC.sol**           | ✅ Complete | Token with controlled mint/burn              |
-| **DSCEngine.sol**     | 🚧 Partial  | Core minting & health monitoring implemented |
-| Chainlink Integration | ✅ Complete | Price feeds connected, USD value calculation |
-| Collateral Deposit    | ✅ Complete | Users can deposit wETH/wBTC                  |
-| Minting Logic         | ✅ Complete | Minting with health factor validation        |
-| Health Factor System  | ✅ Complete | Calculation, validation, and safety checks   |
-| Deployment Scripts    | ✅ Complete | DeployDSC, HelperConfig, ERC20Mock           |
-| Unit Tests            | ✅ Started  | DSCEngineTest with basic test cases          |
-| Redemption            | ⏳ Pending  | Burn DSC and withdraw collateral             |
-| Liquidation           | ⏳ Pending  | Liquidate undercollateralized positions      |
-
-### Recent Updates (Dec 19, 2025)
-
-**✅ Deployment Infrastructure Complete**
-
--   `ERC20Mock.sol` - Simple ERC20 for testing collateral tokens
--   `HelperConfig.s.sol` - Network-aware configuration (Sepolia & Anvil)
--   `DeployDSC.s.sol` - Foundry script for full protocol deployment
--   Support for both testnet (Sepolia) and local (Anvil) environments
--   Automatic ownership transfer from DSC to DSCEngine post-deployment
-
-**✅ Testing Environment Ready**
-
--   Mock price feeds via `MockV3Aggregator` (ETH: $2000, BTC: $80,000)
--   Mock ERC20 tokens via `ERC20Mock` with mint/burn capabilities
--   Configurable deployment across multiple networks (Sepolia & Anvil)
--   Modular test mocks allow isolated unit testing and scenario simulation
-
-**✅ Unit Testing Foundation (Dec 19, 2025)**
-
--   `DSCEngineTest.t.sol` created with test infrastructure
--   Mock user setup with prefunded collateral balance
--   Price conversion tests implemented
--   Deposit validation tests in progress
-
-<div align="center">
-  <i>Documentation updated as development progresses</i>
-</div>

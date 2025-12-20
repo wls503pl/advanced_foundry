@@ -20,11 +20,11 @@ contract DSCEngineTest is Test {
     DSC dsc;
     DSCEngine dscEngine;
     HelperConfig helperConfig;
-    
+
     // Network configuration addresses
     address ethUsdPriceFeed;
     address weth;
-    
+
     // Test user and amounts
     address public USER = makeAddr("user");
     uint256 public constant AMOUNT_COLLATERAL = 10 ether;
@@ -38,10 +38,10 @@ contract DSCEngineTest is Test {
         // Deploy complete DSC protocol
         deployer = new DeployDSC();
         (dsc, dscEngine, helperConfig) = deployer.run();
-        
+
         // Extract network configuration
         (ethUsdPriceFeed,, weth,,) = helperConfig.activeNetworkConfig();
-        
+
         // Mint initial test collateral to USER
         ERC20Mock(weth).mint(USER, STARTING_ERC20_BALANCE);
     }
@@ -49,7 +49,7 @@ contract DSCEngineTest is Test {
     /////////////////////
     // Price Tests //////
     /////////////////////
-    
+
     /**
      * @notice Test USD value conversion from token amount
      * @dev Verifies precision handling: 15 ETH @ $2000 = $30,000
@@ -57,13 +57,13 @@ contract DSCEngineTest is Test {
     function testGetUsdValue() public {
         // 15 ETH at Chainlink price of $2000
         uint256 ethAmount = 15e18;
-        
+
         // Expected: 15 * 2000 = 30,000 USD (in 18-decimal format)
         uint256 expectedUsd = 15e18 * 2000e8 / 1e8;
-        
+
         // Call DSCEngine conversion function
         uint256 actualUsd = dscEngine.getUsdValue(weth, ethAmount);
-        
+
         // Verify conversion accuracy
         assertEq(expectedUsd, actualUsd);
     }
@@ -71,7 +71,7 @@ contract DSCEngineTest is Test {
     /////////////////////////////////
     // DepositCollateral Tests //////
     /////////////////////////////////
-    
+
     /**
      * @notice Test that zero-amount collateral deposits are rejected
      * @dev Ensures moreThanZero modifier is enforced
@@ -79,14 +79,14 @@ contract DSCEngineTest is Test {
     function testRevertsIfCollateralZero() public {
         // Impersonate USER
         vm.startPrank(USER);
-        
+
         // Approve DSCEngine to spend USER's wETH
         ERC20Mock(weth).approve(address(dscEngine), AMOUNT_COLLATERAL);
 
         // Expect revert when attempting to deposit zero collateral
         vm.expectRevert(DSCEngine.DSCEngine__NeedsMoreThanZero.selector);
         dscEngine.depositCollateral(weth, 0);
-        
+
         vm.stopPrank();
     }
 }
