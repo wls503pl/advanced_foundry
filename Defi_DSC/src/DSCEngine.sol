@@ -405,6 +405,22 @@ contract DSCEngine is ReentrancyGuard {
         (totalDscMinted, collateralValueInUsd) = _getAccountInformation(user);
     }
 
+    /**
+     * @notice Calculates health factor from debt and collateral amounts
+     * @dev Pure function that can be used for off-chain calculations
+     * Separated from _healthFactor to allow external/public access
+     * @param totalDscMinted The total DSC debt amount
+     * @param collateralValueInUsd The total collateral value in USD
+     * @return The calculated health factor (in wei, 18 decimals)
+     */
+    function calculateHealthFactor(uint256 totalDscMinted, uint256 collateralValueInUsd)
+        external
+        pure
+        returns (uint256)
+    {
+        return _calculateHealthFactor(totalDscMinted, collateralValueInUsd);
+    }
+
     ///////////////////////////////
     // Internal Functions
     ///////////////////////////////
@@ -491,6 +507,34 @@ contract DSCEngine is ReentrancyGuard {
     }
 
     /**
+     * @notice Calculates health factor from debt and collateral amounts (internal helper)
+     * @dev Used internally to compute health factor without external dependencies
+     * Returns max uint256 if user has no debt (infinite health factor)
+     * @param totalDscMinted The total DSC debt amount
+     * @param collateralValueInUsd The total collateral value in USD
+     * @return The calculated health factor (in wei, 18 decimals)
+     */
+    function _calculateHealthFactor(uint256 totalDscMinted, uint256 collateralValueInUsd)
+        private
+        pure
+        returns (uint256)
+    {
+        // Handle case where user has no debt: health factor is infinite (max uint256)
+        if (totalDscMinted == 0) {
+            return type(uint256).max;
+        }
+
+        // Apply liquidation threshold (50%): only 50% of collateral value counts toward safety
+        // Example: $200 collateral becomes $100 after threshold
+        uint256 collateralAdjustedForThreshold =
+            (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+
+        // Calculate health factor: adjusted collateral / total debt
+        // Health Factor = 1.0 means exactly at liquidation threshold
+        return ((collateralAdjustedForThreshold * PRECISION) / totalDscMinted);
+    }
+
+    /**
      * @notice Calculates the health factor of a user's position
      * @dev Health factor determines how close a position is to liquidation
      * Returns how close to liquidation a user position is
@@ -503,18 +547,8 @@ contract DSCEngine is ReentrancyGuard {
         // Get user's DSC minted amount and collateral value
         (uint256 totalDscMinted, uint256 collateralValueInUsd) = _getAccountInformation(user);
 
-        // Handle case where user has no debt: health factor is infinite (max uint256)
-        if (totalDscMinted == 0) {
-            return type(uint256).max;
-        }
-
-        // Apply liquidation threshold (50%): only 50% of collateral value counts toward safety
-        // Example: $200 collateral becomes $100 after threshold
-        uint256 collateralAdjustedForThreshold = (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
-
-        // Calculate health factor: adjusted collateral / total debt
-        // Health Factor = 1.0 means exactly at liquidation threshold
-        return ((collateralAdjustedForThreshold * PRECISION) / totalDscMinted);
+        // Delegate calculation to pure function for reusability
+        return _calculateHealthFactor(totalDscMinted, collateralValueInUsd);
     }
 
     ///////////////////////////////////
@@ -534,7 +568,7 @@ contract DSCEngine is ReentrancyGuard {
      * - $200 collateral, $80 DSC minted → Health Factor = (200 * 0.5) / 80 = 1.25 (healthy)
      * - $200 collateral, $120 DSC minted → Health Factor = (200 * 0.5) / 120 = 0.83 (liquidatable)
      *
-     * [MODIFICATION] Fixed: was empty stub, now returns actual health factor
+     * @return The health factor value (in wei, 18 decimals)
      */
     function getHealthFactor(address user) external view returns (uint256) {
         return _healthFactor(user);
@@ -543,7 +577,6 @@ contract DSCEngine is ReentrancyGuard {
     /**
      * @notice Get the minimum health factor required by the protocol
      * @return The minimum health factor (1e18 = 1.0)
-     * [ADDED] Needed for tests to verify liquidation threshold
      */
     function getMinHealthFactor() external pure returns (uint256) {
         return MIN_HEALTH_FACTOR;
@@ -552,7 +585,6 @@ contract DSCEngine is ReentrancyGuard {
     /**
      * @notice Get the liquidation threshold percentage
      * @return The liquidation threshold (50 = 50%)
-     * [ADDED] Tests verify health factor calculation uses correct threshold
      */
     function getLiquidationThreshold() external pure returns (uint256) {
         return LIQUIDATION_THRESHOLD;
@@ -561,7 +593,6 @@ contract DSCEngine is ReentrancyGuard {
     /**
      * @notice Get the liquidation bonus percentage
      * @return The bonus percentage (10 = 10%)
-     * [ADDED] Tests verify liquidators receive correct incentive
      */
     function getLiquidationBonus() external pure returns (uint256) {
         return LIQUIDATION_BONUS;
@@ -570,7 +601,6 @@ contract DSCEngine is ReentrancyGuard {
     /**
      * @notice Get the precision for liquidation calculations
      * @return The precision value (100)
-     * [ADDED] Tests use this for bonus calculation verification
      */
     function getLiquidationPrecision() external pure returns (uint256) {
         return LIQUIDATION_PRECISION;
@@ -579,7 +609,6 @@ contract DSCEngine is ReentrancyGuard {
     /**
      * @notice Get the standard precision for internal calculations
      * @return The precision value (1e18)
-     * [ADDED] Tests verify price conversion accuracy with this precision
      */
     function getPrecision() external pure returns (uint256) {
         return PRECISION;
@@ -588,7 +617,6 @@ contract DSCEngine is ReentrancyGuard {
     /**
      * @notice Get the Chainlink price feed precision adjustment
      * @return The adjustment factor (1e10)
-     * [ADDED] Tests verify Chainlink 8-decimal to 18-decimal conversion
      */
     function getAdditionalFeedPrecision() external pure returns (uint256) {
         return ADDITIONAL_FEED_PRECISION;
@@ -597,7 +625,6 @@ contract DSCEngine is ReentrancyGuard {
     /**
      * @notice Get the DSC token contract address
      * @return The address of the DSC contract
-     * [ADDED] Tests verify DSC contract reference
      */
     function getDsc() external view returns (address) {
         return address(i_dsc);
@@ -607,7 +634,6 @@ contract DSCEngine is ReentrancyGuard {
      * @notice Get the price feed address for a collateral token
      * @param token The collateral token address
      * @return The Chainlink price feed address
-     * [ADDED] Tests verify correct oracle is used for each token
      */
     function getCollateralTokenPriceFeed(address token) external view returns (address) {
         return s_priceFeeds[token];
@@ -616,7 +642,6 @@ contract DSCEngine is ReentrancyGuard {
     /**
      * @notice Get all supported collateral tokens
      * @return Array of whitelisted collateral token addresses
-     * [ADDED] Tests verify which tokens are accepted as collateral
      */
     function getCollateralTokens() external view returns (address[] memory) {
         return s_collateralTokens;
@@ -627,7 +652,6 @@ contract DSCEngine is ReentrancyGuard {
      * @param user The user address
      * @param token The collateral token address
      * @return The amount of collateral deposited
-     * [ADDED] Tests verify specific collateral deposit amounts
      */
     function getCollateralBalanceOfUser(address user, address token) external view returns (uint256) {
         return s_collateralDeposited[user][token];

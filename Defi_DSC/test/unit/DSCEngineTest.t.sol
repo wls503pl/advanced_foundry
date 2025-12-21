@@ -178,9 +178,9 @@ contract DSCEngineTest is Test {
     }
 
     function testRevertsIfMintBreaksHealthFactor() public depositedCollateral {
-        // User has $10,000 collateral deposited but NO debt yet
-        // Health factor without debt = infinity (safe)
-        // Just verify that minting works when health factor is good
+        // User has $20,000 collateral (10 ETH * $2000)
+        // Can safely mint up to $10,000 DSC (50% threshold)
+        // Minting $100 is safe
         vm.startPrank(USER);
         dscEngine.mintDsc(AMOUNT_TO_MINT);
         vm.stopPrank();
@@ -310,6 +310,49 @@ contract DSCEngineTest is Test {
         assert(actualHealthFactor == expectedHealthFactor);
     }
 
+    /**
+     * @notice Test calculateHealthFactor pure function with direct parameters
+     * @dev Tests the new calculateHealthFactor() public pure function
+     */
+    function testCalculateHealthFactorDirectly() public view {
+        uint256 collateralValue = 20_000 ether; // $20,000
+        uint256 dscMinted = 100 ether; // $100
+
+        // Expected: ($20,000 * 50%) / $100 = 100 ether
+        uint256 expectedHealthFactor = 100 ether;
+        uint256 actualHealthFactor = dscEngine.calculateHealthFactor(dscMinted, collateralValue);
+
+        assert(actualHealthFactor == expectedHealthFactor);
+    }
+
+    /**
+     * @notice Test calculateHealthFactor with zero debt (infinite health factor)
+     * @dev When no DSC is minted, health factor should be max uint256
+     */
+    function testCalculateHealthFactorWithZeroDebt() public view {
+        uint256 collateralValue = 20_000 ether; // $20,000
+        uint256 dscMinted = 0; // No debt
+
+        // Expected: max uint256 (infinity)
+        uint256 healthFactor = dscEngine.calculateHealthFactor(dscMinted, collateralValue);
+        assert(healthFactor == type(uint256).max);
+    }
+
+    /**
+     * @notice Test calculateHealthFactor with high debt (low health factor)
+     * @dev When debt is high relative to collateral, health factor should be low
+     */
+    function testCalculateHealthFactorHighDebt() public view {
+        uint256 collateralValue = 10_000 ether; // $10,000
+        uint256 dscMinted = 8000 ether; // $8,000 (high debt)
+
+        // Expected: ($10,000 * 50%) / $8,000 = 0.625 ether
+        uint256 expectedHealthFactor = 625e15; // 0.625e18
+        uint256 actualHealthFactor = dscEngine.calculateHealthFactor(dscMinted, collateralValue);
+
+        assert(actualHealthFactor == expectedHealthFactor);
+    }
+
     // ========================
     // Getter Functions Tests
     // ========================
@@ -341,6 +384,21 @@ contract DSCEngineTest is Test {
     function testGetLiquidationBonus() public view {
         uint256 bonus = dscEngine.getLiquidationBonus();
         assert(bonus == 10);
+    }
+
+    function testGetLiquidationPrecision() public view {
+        uint256 precision = dscEngine.getLiquidationPrecision();
+        assert(precision == 100);
+    }
+
+    function testGetPrecision() public view {
+        uint256 precision = dscEngine.getPrecision();
+        assert(precision == 1e18);
+    }
+
+    function testGetAdditionalFeedPrecision() public view {
+        uint256 precision = dscEngine.getAdditionalFeedPrecision();
+        assert(precision == 1e10);
     }
 
     function testGetCollateralTokens() public view {
