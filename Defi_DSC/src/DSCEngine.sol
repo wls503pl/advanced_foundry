@@ -358,6 +358,20 @@ contract DSCEngine is ReentrancyGuard {
     }
 
     /**
+     * @notice Converts a token amount to its USD value
+     * @dev Uses Chainlink price feed to get current token price and calculates USD value
+     * @param token The address of the token (wETH or wBTC)
+     * @param amount The amount of tokens to convert
+     * @return The USD value of the token amount (18 decimals)
+     */
+    function getUsdValue(address token, uint256 amount) public view returns (uint256) {
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[token]);
+        (, int256 price,,,) = priceFeed.latestRoundData();
+
+        return (uint256(price) * ADDITIONAL_FEED_PRECISION * amount) / PRECISION;
+    }
+
+    /**
      * @notice Calculates the total USD value of all collateral deposited by a user
      * @dev Loops through all collateral tokens (wETH, wBTC) and sums their USD values
      * Uses Chainlink price feeds to get real-time prices
@@ -377,17 +391,18 @@ contract DSCEngine is ReentrancyGuard {
     }
 
     /**
-     * @notice Converts a token amount to its USD value
-     * @dev Uses Chainlink price feed to get current token price and calculates USD value
-     * @param token The address of the token (wETH or wBTC)
-     * @param amount The amount of tokens to convert
-     * @return The USD value of the token amount (18 decimals)
+     * @notice Retrieves a user's account information including DSC minted and collateral value
+     * @dev Returns both debt and collateral in a single call
+     * @param user The address of the user
+     * @return totalDscMinted The total amount of DSC tokens minted by the user
+     * @return collateralValueInUsd The total USD value of the user's collateral
      */
-    function getUsdValue(address token, uint256 amount) public view returns (uint256) {
-        AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[token]);
-        (, int256 price,,,) = priceFeed.latestRoundData();
-
-        return (uint256(price) * ADDITIONAL_FEED_PRECISION * amount) / PRECISION;
+    function getAccountInformation(address user)
+        external
+        view
+        returns (uint256 totalDscMinted, uint256 collateralValueInUsd)
+    {
+        (totalDscMinted, collateralValueInUsd) = _getAccountInformation(user);
     }
 
     ///////////////////////////////
@@ -488,6 +503,11 @@ contract DSCEngine is ReentrancyGuard {
         // Get user's DSC minted amount and collateral value
         (uint256 totalDscMinted, uint256 collateralValueInUsd) = _getAccountInformation(user);
 
+        // Handle case where user has no debt: health factor is infinite (max uint256)
+        if (totalDscMinted == 0) {
+            return type(uint256).max;
+        }
+
         // Apply liquidation threshold (50%): only 50% of collateral value counts toward safety
         // Example: $200 collateral becomes $100 after threshold
         uint256 collateralAdjustedForThreshold = (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
@@ -498,11 +518,11 @@ contract DSCEngine is ReentrancyGuard {
     }
 
     ///////////////////////////////////
-    // View & Pure Functions
+    // View & Pure Functions (Getter)
     ///////////////////////////////////
 
     /**
-     * @notice Returns the health factor of a position
+     * @notice Returns the health factor of a user's position
      * @dev Health Factor = (Collateral Value * Liquidation Threshold) / Total DSC Minted
      *
      * Health Factor > 1: Position is healthy (safe)
@@ -513,6 +533,103 @@ contract DSCEngine is ReentrancyGuard {
      * - $200 collateral, $100 DSC minted → Health Factor = (200 * 0.5) / 100 = 1.0
      * - $200 collateral, $80 DSC minted → Health Factor = (200 * 0.5) / 80 = 1.25 (healthy)
      * - $200 collateral, $120 DSC minted → Health Factor = (200 * 0.5) / 120 = 0.83 (liquidatable)
+     *
+     * [MODIFICATION] Fixed: was empty stub, now returns actual health factor
      */
-    function getHealthFactor() external view {}
+    function getHealthFactor(address user) external view returns (uint256) {
+        return _healthFactor(user);
+    }
+
+    /**
+     * @notice Get the minimum health factor required by the protocol
+     * @return The minimum health factor (1e18 = 1.0)
+     * [ADDED] Needed for tests to verify liquidation threshold
+     */
+    function getMinHealthFactor() external pure returns (uint256) {
+        return MIN_HEALTH_FACTOR;
+    }
+
+    /**
+     * @notice Get the liquidation threshold percentage
+     * @return The liquidation threshold (50 = 50%)
+     * [ADDED] Tests verify health factor calculation uses correct threshold
+     */
+    function getLiquidationThreshold() external pure returns (uint256) {
+        return LIQUIDATION_THRESHOLD;
+    }
+
+    /**
+     * @notice Get the liquidation bonus percentage
+     * @return The bonus percentage (10 = 10%)
+     * [ADDED] Tests verify liquidators receive correct incentive
+     */
+    function getLiquidationBonus() external pure returns (uint256) {
+        return LIQUIDATION_BONUS;
+    }
+
+    /**
+     * @notice Get the precision for liquidation calculations
+     * @return The precision value (100)
+     * [ADDED] Tests use this for bonus calculation verification
+     */
+    function getLiquidationPrecision() external pure returns (uint256) {
+        return LIQUIDATION_PRECISION;
+    }
+
+    /**
+     * @notice Get the standard precision for internal calculations
+     * @return The precision value (1e18)
+     * [ADDED] Tests verify price conversion accuracy with this precision
+     */
+    function getPrecision() external pure returns (uint256) {
+        return PRECISION;
+    }
+
+    /**
+     * @notice Get the Chainlink price feed precision adjustment
+     * @return The adjustment factor (1e10)
+     * [ADDED] Tests verify Chainlink 8-decimal to 18-decimal conversion
+     */
+    function getAdditionalFeedPrecision() external pure returns (uint256) {
+        return ADDITIONAL_FEED_PRECISION;
+    }
+
+    /**
+     * @notice Get the DSC token contract address
+     * @return The address of the DSC contract
+     * [ADDED] Tests verify DSC contract reference
+     */
+    function getDsc() external view returns (address) {
+        return address(i_dsc);
+    }
+
+    /**
+     * @notice Get the price feed address for a collateral token
+     * @param token The collateral token address
+     * @return The Chainlink price feed address
+     * [ADDED] Tests verify correct oracle is used for each token
+     */
+    function getCollateralTokenPriceFeed(address token) external view returns (address) {
+        return s_priceFeeds[token];
+    }
+
+    /**
+     * @notice Get all supported collateral tokens
+     * @return Array of whitelisted collateral token addresses
+     * [ADDED] Tests verify which tokens are accepted as collateral
+     */
+    function getCollateralTokens() external view returns (address[] memory) {
+        return s_collateralTokens;
+    }
+
+    /**
+     * @notice Get the collateral balance of a user for a specific token
+     * @param user The user address
+     * @param token The collateral token address
+     * @return The amount of collateral deposited
+     * [ADDED] Tests verify specific collateral deposit amounts
+     */
+    function getCollateralBalanceOfUser(address user, address token) external view returns (uint256) {
+        return s_collateralDeposited[user][token];
+    }
 }
