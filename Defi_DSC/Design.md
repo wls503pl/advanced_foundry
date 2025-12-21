@@ -11,8 +11,8 @@
 -   [Overview](#overview)
 -   [DSC.sol - Token Contract](#dscsol---token-contract)
 -   [DSCEngine.sol - Core Engine](#dscenginesol---core-engine)
+-   [Liquidation Mechanism](#liquidation-mechanism)
 -   [Deployment & Testing](#deployment--testing)
--   [Contract Interaction](#contract-interaction)
 
 ---
 
@@ -31,18 +31,18 @@ DSC is a **decentralized algorithmic stablecoin** maintaining 1:1 USD peg throug
 ### System Architecture
 
 ```
-┌──────────────────────┐
+┌──────────────────────────────┐
 │     DSC.sol          │  ERC20 stablecoin token
-└──────────┬───────────┘
+└──────────────────────┬────────┘
            │ owned by
            ↓
-┌──────────────────────────────────────┐
+┌──────────────────────────────────────────────────────┐
 │      DSCEngine.sol                   │  Collateral & minting logic
-└──────────────────────────────────────┘
+└──────────────────────────┬──────────────────────────┘
            ↓
            │ uses
            │
-    ┌──────┴──────┐
+    ┌──────────┴──────────┐
     │             │
  wETH          wBTC
 (Collateral)  (Collateral)
@@ -63,7 +63,7 @@ ERC20 (OpenZeppelin)
   ↓
 ERC20Burnable (OpenZeppelin)
   ↓                           Ownable (OpenZeppelin)
-  └────────────────────────────────────┬──────────────────────┘
+  └────────────────────────────────────────┬──────────────────────────┘
                   ↓
                 DSC.sol
 ```
@@ -218,7 +218,7 @@ DSCEngine is the brain of the protocol, managing:
 -   **Collateral Management** - Deposits and withdrawals of wETH/wBTC
 -   **DSC Minting** - Creating stablecoins based on collateral value
 -   **Health Monitoring** - Tracking position safety via health factors
--   **Liquidations** - Protecting system solvency
+-   **Liquidations** - Protecting system solvency through incentivized liquidations
 
 ### Inheritance
 
@@ -246,6 +246,7 @@ uint256 private constant ADDITIONAL_FEED_PRECISION = 1e10;  // Converts Chainlin
 uint256 private constant PRECISION = 1e18;                   // Standard 18 decimal precision
 uint256 private constant LIQUIDATION_THRESHOLD = 50;         // 50% = 200% collateralization required
 uint256 private constant LIQUIDATION_PRECISION = 100;        // Denominator for threshold calculation
+uint256 private constant LIQUIDATION_BONUS = 10;             // 10% bonus for liquidators
 uint256 private constant MIN_HEALTH_FACTOR = 1e18;          // Minimum health factor = 1.0
 
 // Token → Price Feed mapping
@@ -274,6 +275,7 @@ DSC private immutable i_dsc;
 
 -   `LIQUIDATION_THRESHOLD = 50`: Users can borrow up to 50% of their collateral value (requires 200% collateralization)
 -   `LIQUIDATION_PRECISION = 100`: Used as denominator in percentage calculations (50/100 = 0.5)
+-   `LIQUIDATION_BONUS = 10`: Liquidators receive 10% extra collateral as incentive (110% total)
 -   `MIN_HEALTH_FACTOR = 1e18`: Represents 1.0 in 18-decimal precision. Positions below this can be liquidated
 
 **Example:** With $2000 collateral, user can mint maximum $1000 DSC (50% ratio)
@@ -281,27 +283,24 @@ DSC private immutable i_dsc;
 ### Custom Errors
 
 ```solidity
-error DSCEngine__NeedsMoreThanZero();
-error DSCEngine__AddressLengthOfTokenAndPriceFeedNotMatch();
-error DSCEngine__NotAllowedToken();
-error DSCEngine__TransferFailed();
-error DSCEngine__BreaksHealthFactor(uint256 healthFactor);  // Reports the actual health factor value
-error DSCEngine__MintFailed();
+error DSCEngine__NeedsMoreThanZero();                      // Amount validation
+error DSCEngine__AddressLengthOfTokenAndPriceFeedNotMatch();  // Constructor array mismatch
+error DSCEngine__NotAllowedToken();                        // Unsupported token
+error DSCEngine__TransferFailed();                         // ERC20 transfer failure
+error DSCEngine__BreaksHealthFactor(uint256 healthFactor); // Includes actual HF value
+error DSCEngine__MintFailed();                             // DSC minting failure
+error DSCEngine__HealthFactorOk();                         // Position not liquidatable
+error DSCEngine__HealthFactorNotImproved();                // Liquidation didn't improve position
 ```
-
-**New errors added (Dec 20, 2025):**
-
--   `DSCEngine__BreaksHealthFactor`: Includes the calculated health factor for debugging
--   `DSCEngine__MintFailed`: Catches failures in the DSC minting process
 
 ### Events
 
 ```solidity
 event CollateralDeposited(address indexed user, address indexed token, uint256 amount);
-event CollateralRedeemed(address indexed user, address indexed token, uint256 amount);
+event CollateralRedeemed(address indexed token, uint256 amount, address indexed redeemedFrom, address indexed redeemedTo);
 ```
 
-The `CollateralRedeemed` event tracks when users withdraw their collateral from the protocol.
+**Note:** `CollateralRedeemed` now tracks both `redeemedFrom` and `redeemedTo` addresses to support liquidations where collateral is transferred to a different address than the depositor.
 
 ### Security Modifiers
 
@@ -410,6 +409,20 @@ function depositCollateral(address tokenCollateralAddress, uint256 amountCollate
 2. **Effects:** Update user's collateral balance, emit event
 3. **Interactions:** Transfer tokens from user to contract
 
+**Implementation:**
+
+```solidity
+// Effects: Update user's collateral balance in our accounting
+s_collateralDeposited[msg.sender][tokenCollateralAddress] += amountCollateral;
+emit CollateralDeposited(msg.sender, tokenCollateralAddress, amountCollateral);
+
+// Interactions: Transfer collateral tokens from user to this contract
+bool success = IERC20(tokenCollateralAddress).transferFrom(msg.sender, address(this), amountCollateral);
+if (!success) {
+    revert DSCEngine__TransferFailed();
+}
+```
+
 **Example:**
 
 ```
@@ -474,23 +487,14 @@ function redeemCollateral(address tokenCollateralAddress, uint256 amountCollater
 
 **Changed to `public`:** Allows internal calls from `redeemCollateralForDsc()` while remaining callable externally
 
-**CEI Pattern:**
+**Implementation:**
 
-1. **Checks:** Modifiers validate amount > 0 and prevent reentrancy
-2. **Effects:** Reduce collateral balance, emit event
-3. **Interactions:** Transfer collateral back to user
-4. **Check:** Validate health factor (must still be >= 1.0 after withdrawal)
+```solidity
+// Low-level helper function that updates state and transfers tokens
+_redeemCollateral(tokenCollateralAddress, amountCollateral, msg.sender, msg.sender);
 
-**Example:**
-
-```
-User withdraws 3 wETH
-├─ Check: amount > 0 ✓
-├─ Check: nonReentrant ✓
-├─ Effect: s_collateralDeposited[user][wETH] -= 3e18
-├─ Emit: CollateralRedeemed(user, wETH, 3e18)
-├─ Transfer: wETH.transfer(user, 3e18)
-└─ Check: Health factor >= 1.0 ✓
+// Check: Ensure withdrawal doesn't break health factor
+_revertIfHealthFactorIsBroken(msg.sender);
 ```
 
 **Safety mechanism:** Cannot withdraw if it would push health factor below 1.0
@@ -567,24 +571,13 @@ function burnDsc(uint256 amount) public moreThanZero(amount)
 
 **Changed to `public`:** Allows internal calls from `redeemCollateralForDsc()` while remaining callable externally
 
-**Process:**
-
-1. Reduce user's debt: `s_dscMinted[msg.sender] -= amount`
-2. Transfer DSC from user to DSCEngine via `transferFrom()`
-3. Burn DSC tokens via `i_dsc.burn(amount)` (permanent destruction)
-4. Validate health factor (should always pass since debt is reduced)
-
 **Implementation:**
 
 ```solidity
-s_dscMinted[msg.sender] -= amount;
+// Low-level helper function that reduces debt and burns tokens
+_burnDsc(amount, msg.sender, msg.sender);
 
-bool success = i_dsc.transferFrom(msg.sender, address(this), amount);
-if (!success) {
-    revert DSCEngine__TransferFailed();
-}
-
-i_dsc.burn(amount);
+// Validate health factor (should always pass since debt is reduced)
 _revertIfHealthFactorIsBroken(msg.sender);
 ```
 
@@ -606,7 +599,246 @@ User burns 5,000 DSC:
 
 **Why approve is needed:** User must call `DSC.approve(DSCEngine, amount)` before calling `burnDsc()` to allow DSCEngine to spend their DSC tokens
 
+---
+
+## Liquidation Mechanism
+
+### Overview
+
+The liquidation mechanism is **critical to protocol solvency**. It ensures the protocol always remains overcollateralized by incentivizing liquidators to quickly close undercollateralized positions.
+
+**Core principle:** Liquidators receive a financial incentive (10% bonus) to cover the debt of risky positions, protecting the protocol from insolvency.
+
+### Why Liquidation Matters
+
+Without liquidation, a scenario could occur where:
+
+```
+Scenario: Collateral Plummets
+┌─────────────────────────────────────────────────────┐
+│ 1. User deposits: 1 ETH @ $2000 = $2000            │
+│ 2. User mints: $1000 DSC                           │
+│ 3. ETH price crashes: $2000 → $1000                │
+│ 4. User's collateral: $1000 < DSC minted: $1000    │
+│ 5. Protocol is now INSOLVENT!                      │
+│    Total DSC in circulation > Total collateral     │
+└─────────────────────────────────────────────────────┘
+```
+
+**Without liquidation:** The protocol has no mechanism to recover and DSC would lose its peg.
+
+**With liquidation:** Any liquidator can immediately close the position and prevent insolvency.
+
+### liquidate() Function
+
+```solidity
+function liquidate(
+    address collateral,        // Collateral to liquidate (wETH or wBTC)
+    address user,              // User whose position is unsafe
+    uint256 debtToCover        // DSC debt amount to cover
+) external moreThanZero(debtToCover) nonReentrant
+```
+
+**Purpose:** Anyone can liquidate an undercollateralized position and earn a bonus
+
+**Liquidation Flow:**
+
+```solidity
+// 1. Check: Verify user's position is actually liquidatable
+uint256 startingUserHealthFactor = _healthFactor(user);
+if (startingUserHealthFactor >= MIN_HEALTH_FACTOR) {
+    revert DSCEngine__HealthFactorOk();
+}
+
+// 2. Calculate token amount from debt (e.g., $100 DSC debt → 0.1 ETH)
+uint256 tokenAmountFromDebtCovered = getTokenAmountFromUsd(collateral, debtToCover);
+
+// 3. Add 10% liquidation bonus incentive
+uint256 bonusCollateral = (tokenAmountFromDebtCovered * LIQUIDATION_BONUS) / LIQUIDATION_PRECISION;
+
+// 4. Calculate total collateral to transfer to liquidator
+uint256 totalCollateralToRedeem = tokenAmountFromDebtCovered + bonusCollateral;
+
+// 5. Effects & Interactions: Transfer bad user's collateral to liquidator
+_redeemCollateral(collateral, totalCollateralToRedeem, user, msg.sender);
+
+// 6. Burn the bad user's DSC debt
+_burnDsc(debtToCover, user, msg.sender);
+
+// 7. Check: Verify liquidation actually improved the position
+uint256 endingUserHealthFactor = _healthFactor(user);
+if (endingUserHealthFactor <= startingUserHealthFactor) {
+    revert DSCEngine__HealthFactorNotImproved();
+}
+
+// 8. Check: Ensure liquidator's own health factor isn't broken
+_revertIfHealthFactorIsBroken(msg.sender);
+```
+
+### Liquidation Incentive Mechanism
+
+**The 10% bonus is the key to system solvency:**
+
+```
+Bad User Position:
+- Collateral: $140 ETH
+- DSC Minted: $100
+
+Liquidator covers $100 debt:
+├─ Receives: 0.1 ETH worth of collateral ($100)
+├─ Receives 10% bonus: 0.01 ETH ($10)
+└─ Total received: 0.11 ETH ($110)
+
+Result: Liquidator makes $10 profit for protecting the protocol
+        Bad user's position is closed
+        Protocol remains solvent
+```
+
+**Why this works:**
+
+1. **Profitable for liquidators:** 10% return incentivizes quick action
+2. **Protective for protocol:** Undercollateralized positions are quickly eliminated
+3. **Fair for bad debtors:** They get their excess collateral back ($30 in example)
+
+### Real-World Liquidation Example
+
+```
+Scenario: ETH price crash triggers liquidation
+
+BEFORE LIQUIDATION:
+┌──────────────────────────────────────────┐
+│ User: Alice                              │
+│ Collateral: 10 wETH @ $2000 = $20,000   │
+│ DSC Minted: $15,000                      │
+│ Health Factor: ($20,000 × 50%) / $15,000 = 0.67 ✗ (LIQUIDATABLE)
+└──────────────────────────────────────────┘
+
+ETH PRICE CRASHES: $2000 → $1500
+┌──────────────────────────────────────────┐
+│ User: Alice                              │
+│ Collateral: 10 wETH @ $1500 = $15,000   │
+│ DSC Minted: $15,000 (unchanged)          │
+│ Health Factor: ($15,000 × 50%) / $15,000 = 0.5 ✗ (VERY LIQUIDATABLE)
+└──────────────────────────────────────────┘
+
+LIQUIDATOR CALLS: liquidate(wETH, Alice, 9000)
+(Covering $9,000 of Alice's $15,000 debt)
+
+1. Calculate token amount: $9000 DSC → 6 wETH
+   (getTokenAmountFromUsd(wETH, 9000e18) = 6e18)
+
+2. Add bonus: 6 wETH × 10% = 0.6 wETH
+
+3. Total transfer: 6 + 0.6 = 6.6 wETH to liquidator
+
+4. Burn Alice's debt: -$9,000 DSC
+
+AFTER LIQUIDATION (Partial):
+┌──────────────────────────────────────────┐
+│ User: Alice                              │
+│ Collateral: 3.4 wETH @ $1500 = $5,100   │
+│ DSC Minted: $6,000 (reduced from $15,000)
+│ Health Factor: ($5,100 × 50%) / $6,000 = 0.425 ✗ (STILL LIQUIDATABLE)
+│ → More liquidators can cover the remaining $6,000 debt
+│
+│ Liquidator: Bob (earned 0.6 wETH = $900 profit)
+│ This incentive ensures quick liquidation in crisis
+└──────────────────────────────────────────┘
+```
+
+### Protocol Solvency Guarantee
+
+**With the liquidation bonus system:**
+
+```
+Protocol Invariant:
+Total Collateral Value > Total DSC Minted (always)
+
+Why:
+- Users can only mint if: (collateral × 50%) ≥ DSC minted
+- When position becomes undercollateralized:
+  - Liquidators are incentivized by 10% bonus
+  - Quick liquidations prevent cascade failures
+  - Protocol's total collateral stays > total DSC
+
+Example Math (200% overcollateralization required):
+┌─────────────────────────────────────────┐
+│ If all users maxed out:                 │
+│ Total Collateral: $100 million          │
+│ Max DSC mintable: $50 million (50%)      │
+│ → 200% collateralized at max            │
+│
+│ Even if collateral drops 20%:           │
+│ New Collateral: $80 million             │
+│ DSC Minted: $50 million (stays same)    │
+│ → Still 160% collateralized             │
+│ → Positions not liquidated yet          │
+│
+│ If collateral drops 50%:                │
+│ New Collateral: $50 million             │
+│ DSC Minted: $50 million                 │
+│ → At liquidation threshold              │
+│ → Liquidators jump in (10% bonus!)      │
+│ → Positions quickly closed              │
+│ → Protocol remains solvent              │
+└─────────────────────────────────────────┘
+```
+
+### Known Limitations
+
+**The system assumes roughly 200% collateralization at all times.** A known edge case exists:
+
+```
+Known Bug Scenario (extreme edge case):
+├─ Protocol collateral drops below 100%
+├─ (e.g., collateral = $50M, DSC minted = $60M)
+├─ Liquidators can't be incentivized
+│  (They'd lose money covering debt at discount)
+├─ Example: $60M debt, $40M collateral
+│  → Even at 10% bonus: liquidator receives $40M + $4M = $44M
+│  → But they cover $60M debt → lose $16M
+│  → No rational liquidator would participate
+│
+└─ Mitigation: This requires catastrophic collateral collapse BEFORE
+   liquidations can execute (e.g., flash crash not caught by oracles)
+   Proper oracle design and circuit breakers prevent this in practice
+```
+
+**Future Enhancement:** Implement protocol treasury sweep for insolvency:
+
+```solidity
+// Pseudo-code for future improvement (as noted in code comments)
+// If protocol becomes insolvent, sweep extra collateral to treasury
+// Example: liquidate more than debt coverage to accumulate treasury funds
+uint256 treasurySweep = excessCollateral * TREASURY_SWEEP_RATIO;
+treasury.transfer(treasurySweep);
+```
+
+---
+
 ### Public View Functions
+
+#### getTokenAmountFromUsd()
+
+```solidity
+function getTokenAmountFromUsd(address token, uint256 usdAmountInWei) public view returns (uint256)
+```
+
+**Purpose:** Converts a USD amount to the equivalent token amount using current price feed
+
+**Used by liquidation:** Calculates how many ETH/BTC the liquidator should receive for covering DSC debt
+
+**Formula:** `(USD amount × PRECISION) / (token price × price feed precision)`
+
+**Example:**
+
+```
+Input: getTokenAmountFromUsd(wETH, 9000e18)
+- USD amount: $9000
+- ETH price: $1500 (from Chainlink)
+- Calculation: (9000e18 × 1e18) / (150000000000 × 1e10)
+- Output: 6e18 (6 ETH)
+```
 
 #### getAccountCollateralValue()
 
@@ -664,12 +896,7 @@ return (price * ADDITIONAL_FEED_PRECISION * amount) / PRECISION;
 #### \_revertIfHealthFactorIsBroken()
 
 ```solidity
-function _revertIfHealthFactorIsBroken(address user) internal view {
-    uint256 userHealthFactor = _healthFactor(user);
-    if (userHealthFactor < MIN_HEALTH_FACTOR) {
-        revert DSCEngine__BreaksHealthFactor(userHealthFactor);
-    }
-}
+function _revertIfHealthFactorIsBroken(address user) internal view
 ```
 
 **Purpose:** Validates user's position safety after risky operations
@@ -696,17 +923,10 @@ function _getAccountInformation(address user) private view
 -   `totalDscMinted`: Amount of DSC user has borrowed
 -   `collateralValueInUsd`: Total USD value of user's deposited collateral
 
-**Why useful:** Combines two state reads into one function call, used by `_healthFactor()`
-
 #### \_healthFactor()
 
 ```solidity
-function _healthFactor(address user) private view returns (uint256) {
-    (uint256 totalDscMinted, uint256 collateralValueInUsd) = _getAccountInformation(user);
-    uint256 collateralAdjustedForThreshold =
-        (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
-    return (collateralAdjustedForThreshold * PRECISION) / totalDscMinted;
-}
+function _healthFactor(address user) private view returns (uint256)
 ```
 
 **Purpose:** Calculates how close a position is to liquidation
@@ -717,12 +937,6 @@ function _healthFactor(address user) private view returns (uint256) {
 Health Factor = (Collateral Value × Liquidation Threshold) / DSC Minted
              = (Collateral Value × 50%) / DSC Minted
 ```
-
-**Step-by-step calculation:**
-
-1. Get user's collateral value (in USD)
-2. Apply 50% threshold: `collateralAdjustedForThreshold = collateralValue × 50 / 100`
-3. Divide by DSC minted and scale to 18 decimals
 
 **Interpretation:**
 
@@ -754,13 +968,65 @@ Example 3: Liquidatable Position
 - Status: ❌ Can be liquidated
 ```
 
-**Edge case handling:**
+#### \_burnDsc()
 
-If `totalDscMinted = 0`, the function would divide by zero. This is prevented by the system design:
+```solidity
+function _burnDsc(uint256 amountDscToBurn, address onBehalfOf, address dscFrom) private
+```
 
--   Users must deposit collateral first (`depositCollateral()`)
--   They can only mint if health factor check passes
--   Health factor is only checked when DSC is minted, so `totalDscMinted > 0` when this function is called
+**Purpose:** Low-level internal function for burning DSC tokens
+
+**Parameters:**
+
+-   `amountDscToBurn`: DSC amount to destroy
+-   `onBehalfOf`: User whose debt is being reduced
+-   `dscFrom`: Address to transfer DSC from (can be liquidator)
+
+**Used by:**
+
+-   `burnDsc()` - User reduces their own debt
+-   `redeemCollateralForDsc()` - User burns DSC to redeem collateral
+-   `liquidate()` - Liquidator covers bad user's debt
+
+**Example (liquidation):**
+
+```
+liquidate() calls: _burnDsc(9000, alice, bob)
+├─ onBehalfOf = alice (whose debt is reduced)
+├─ dscFrom = bob (liquidator pays the debt)
+└─ Effect: alice's debt -9000, bob's DSC -9000
+```
+
+#### \_redeemCollateral()
+
+```solidity
+function _redeemCollateral(address tokenCollateralAddress, uint256 amountCollateral, address from, address to) private
+```
+
+**Purpose:** Low-level internal function for transferring collateral
+
+**Parameters:**
+
+-   `tokenCollateralAddress`: Token to transfer (wETH or wBTC)
+-   `amountCollateral`: Amount to transfer
+-   `from`: User whose collateral is withdrawn
+-   `to`: Recipient of collateral (can be different in liquidations)
+
+**Used by:**
+
+-   `redeemCollateral()` - User withdraws own collateral
+-   `redeemCollateralForDsc()` - User redeems collateral
+-   `liquidate()` - Transfer bad user's collateral to liquidator
+
+**Example (liquidation):**
+
+```
+liquidate() calls: _redeemCollateral(wETH, 6.6, alice, bob)
+├─ from = alice (whose collateral is withdrawn)
+├─ to = bob (liquidator receives collateral)
+└─ Effect: Transfer 6.6 wETH from DSCEngine to bob
+           (deducted from alice's collateral)
+```
 
 ### Design Patterns
 
@@ -783,19 +1049,6 @@ emit CollateralDeposited(...);
 IERC20(token).transferFrom(msg.sender, address(this), amount);
 ```
 
-**Example in redeemCollateral():**
-
-```solidity
-// Checks: moreThanZero, nonReentrant
-// Effects:
-s_collateralDeposited[msg.sender][token] -= amount;
-emit CollateralRedeemed(...);
-// Interactions:
-IERC20(token).transfer(msg.sender, amount);
-// Check (after interactions):
-_revertIfHealthFactorIsBroken(msg.sender);
-```
-
 ---
 
 ## Deployment & Testing
@@ -815,61 +1068,24 @@ constructor(
 )
 ```
 
-**Example usage in tests:**
-
-```solidity
-ERC20Mock wETH = new ERC20Mock("Wrapped Ether", "WETH", msg.sender, 1000e18);
-ERC20Mock wBTC = new ERC20Mock("Wrapped Bitcoin", "WBTC", msg.sender, 1000e8);
-```
-
-**Available functions:**
-
--   `mint(address to, uint256 amount)` - Mint tokens (public)
--   `burn(address from, uint256 amount)` - Burn tokens (public)
--   Standard ERC20 functions: `transfer()`, `approve()`, `balanceOf()`
-
 ### MockV3Aggregator.sol
 
-Chainlink price feed mock for simulating oracle responses in tests. Source: Chainlink test utilities.
+Chainlink price feed mock for simulating oracle responses in tests.
 
 **Constructor Parameters:**
 
 ```solidity
 constructor(
     uint8 _decimals,          // Decimal places (8 for Chainlink feeds)
-    int256 _initialAnswer     // Initial price (e.g., 200000000000 for $2000 with 8 decimals)
+    int256 _initialAnswer     // Initial price (e.g., 200000000000 for $2000)
 )
 ```
 
-**Key Functions:**
-
--   `latestRoundData()` - Returns current price, mimics actual Chainlink interface
--   `updateAnswer(int256 _answer)` - Update current price for testing different scenarios
--   `getRoundData(uint80 _roundId)` - Get historical price data by round ID
--   `description()` - Returns contract identifier
-
-**Why this design matters:**
-
-The mock implements the exact same `latestRoundData()` interface that DSCEngine expects from Chainlink's `AggregatorV3Interface`. This allows DSCEngine to work identically whether using real Chainlink feeds or mock feeds in tests.
-
-**Example usage in HelperConfig:**
-
-```solidity
-MockV3Aggregator wETH_USDPriceFeed = new MockV3Aggregator(8, 2000e8);      // $2000 with 8 decimals
-MockV3Aggregator wBTC_USDPriceFeed = new MockV3Aggregator(8, 80000e8);     // $80,000 with 8 decimals
-```
-
-This allows tests to:
-
--   Simulate price movements by calling `updateAnswer()`
--   Test edge cases (extreme prices, flash crashes)
--   Avoid external dependencies and ensure deterministic test results
-
 ### HelperConfig.s.sol
 
-Configuration contract that sets up environment-specific addresses for both Sepolia testnet and local Anvil development.
+Configuration contract for environment-specific addresses (Sepolia testnet and local Anvil).
 
-**Structure:**
+**Key Structure:**
 
 ```solidity
 struct NetworkConfig {
@@ -881,122 +1097,10 @@ struct NetworkConfig {
 }
 ```
 
-**Configuration Constants:**
-
-```solidity
-uint8 DECIMALS = 8;              // Chainlink oracle decimals
-int256 ETH_USD_PRICE = 2000e8;   // Mock ETH price: $2000
-int256 BTC_USD_PRICE = 80000e8;  // Mock BTC price: $80,000
-uint256 DEFAULT_ANVIL_KEY = 0xac097...  // Default Anvil private key
-```
-
-**Network Configurations:**
-
-**Sepolia (Ethereum testnet):**
-
-```solidity
-function getSepoliaEthConfig() public view returns (NetworkConfig memory) {
-    return NetworkConfig({
-        wETH_UsdPriceFeed: 0x694AA1769357215DE4FAC081bf1f309aDC325306,
-        wBTC_UsdPriceFeed: 0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43,
-        wETH: 0xdd13E55209Fd76AfE204dBda4007C227904f0a81,
-        wBTC: 0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063,
-        deployerKey: vm.envUint("PRIVATE_KEY")  // Read from .env
-    });
-}
-```
-
-**Anvil/Local (default):**
-
-```solidity
-function getOrCreateAnvilEthConfig() public returns (NetworkConfig memory)
-```
-
-**Process:**
-
-1. Check if already initialized (early return to save gas)
-2. Deploy `MockV3Aggregator` for ETH and BTC price feeds
-3. Deploy `ERC20Mock` tokens (wETH and wBTC) with initial supply
-4. Return configuration pointing to locally deployed contracts
-
 ### DeployDSC.s.sol
 
-Foundry script that deploys the entire DSC protocol.
+Foundry script that deploys the entire DSC protocol with proper ownership transfer.
 
-**Deployment Flow:**
+### Testing with DSCEngineTest.t.sol
 
-```solidity
-function run() external returns (DSC, DSCEngine, HelperConfig) {
-    // 1. Get network configuration
-    HelperConfig helperConfig = new HelperConfig();
-    (address wethUsdPriceFeed, address wbtcUsdPriceFeed,
-     address weth, address wbtc, uint256 deployerKey) = helperConfig.activeNetworkConfig();
-
-    // 2. Prepare arrays for DSCEngine
-    tokenAddresses = [weth, wbtc];
-    priceFeedAddresses = [wethUsdPriceFeed, wbtcUsdPriceFeed];
-
-    // 3. Deploy contracts within broadcast scope
-    vm.startBroadcast(deployerKey);
-    DSC dsc = new DSC();
-    DSCEngine dscEngine = new DSCEngine(tokenAddresses, priceFeedAddresses, address(dsc));
-
-    // 4. Transfer ownership BEFORE stopping broadcast
-    dsc.transferOwnership(address(dscEngine));
-    vm.stopBroadcast();
-
-    return (dsc, dscEngine, helperConfig);
-}
-```
-
-**Key Points:**
-
--   DSC is deployed first (before DSCEngine can reference it)
--   DSCEngine receives DSC address in constructor
--   **Ownership transfer must occur within `vm.startBroadcast()` scope** to use deployerKey authority
--   Returns all three for use in tests/verification
-
-**Running the script:**
-
-```bash
-# Local (Anvil)
-forge script script/DeployDSC.s.sol --rpc-url http://localhost:8545 --broadcast
-
-# Sepolia
-forge script script/DeployDSC.s.sol --rpc-url https://eth-sepolia.alchemyapi.io/v2/YOUR_KEY --broadcast --verify
-```
-
-## Testing
-
-### DSCEngineTest.t.sol
-
-Unit tests for DSCEngine contract functionality using Foundry's testing framework.
-
-**Test Setup:**
-
-```solidity
-function setUp() public {
-    deployer = new DeployDSC();
-    (dsc, dscEngine, helperConfig) = deployer.run();
-    (ethUsdPriceFeed,, weth,,) = helperConfig.activeNetworkConfig();
-    ERC20Mock(weth).mint(USER, STARTING_ERC20_BALANCE);
-}
-```
-
-**Setup Details:**
-
--   `USER = makeAddr("user")` - Creates a test user address
--   `AMOUNT_COLLATERAL = 10 ether` - Standard collateral amount for tests
--   `STARTING_ERC20_BALANCE = 10 ether` - Initial balance minted to test user
--   Mint wETH to USER for deposit testing
-
-**Test Categories:**
-
-**Price Tests:**
-
--   `testGetUsdValue()` - Verify USD value conversion accuracy (15 ETH @ $2000 = $30,000)
-
-**Deposit Tests:**
-
--   `testRevertsIfCollateralZero()` - Ensure zero-amount deposits are rejected
--   Additional deposit validation tests (placeholder for future implementation)
+Comprehensive unit tests using Foundry framework.
