@@ -526,8 +526,7 @@ contract DSCEngine is ReentrancyGuard {
 
         // Apply liquidation threshold (50%): only 50% of collateral value counts toward safety
         // Example: $200 collateral becomes $100 after threshold
-        uint256 collateralAdjustedForThreshold =
-            (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+        uint256 collateralAdjustedForThreshold = (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
 
         // Calculate health factor: adjusted collateral / total debt
         // Health Factor = 1.0 means exactly at liquidation threshold
