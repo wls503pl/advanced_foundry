@@ -27,6 +27,7 @@ import {DSC} from "./DSC.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+import {OracleLib} from "./libraries/OracleLib.sol";
 
 /**
  * @title DSCEngine
@@ -55,6 +56,11 @@ contract DSCEngine is ReentrancyGuard {
     error DSCEngine__MintFailed();
     error DSCEngine__HealthFactorOk();
     error DSCEngine__HealthFactorNotImproved();
+
+    ///////////////////
+    // Type
+    ///////////////////
+    using OracleLib for AggregatorV3Interface;
 
     ///////////////////
     // State Variables
@@ -343,15 +349,16 @@ contract DSCEngine is ReentrancyGuard {
 
     /**
      * @notice Converts a USD amount to the equivalent token amount using current price feed
-     * @dev Reverse calculation: takes USD value and returns how many tokens you'd get
+     * @dev Fetches price from Chainlink oracle with staleness check via OracleLib
      * @param token The collateral token address (wETH or wBTC)
      * @param usdAmountInWei The USD amount to convert (in wei, 18 decimals)
      * @return The equivalent amount of tokens (in wei, 18 decimals)
+     * @dev Reverts if oracle price data is stale (older than 3 hours)
      */
     function getTokenAmountFromUsd(address token, uint256 usdAmountInWei) public view returns (uint256) {
         // Fetch current token price from Chainlink oracle
         AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[token]);
-        (, int256 price,,,) = priceFeed.latestRoundData();
+        (, int256 price,,,) = priceFeed.staleCheckLatestRoundData();
 
         // Formula: (USD amount * PRECISION) / (token price * price feed precision)
         return (usdAmountInWei * PRECISION) / (uint256(price) * ADDITIONAL_FEED_PRECISION);

@@ -41,7 +41,7 @@ contract Handler is Test {
         ERC20Mock collateral = _getCollateralFromSeed(collateralSeed);
         // Bound amount between 1 and MAX_DEPOSIT_SIZE
         amountCollateral = bound(amountCollateral, 1, MAX_DEPOSIT_SIZE);
-        
+
         vm.startPrank(USER);
         collateral.mint(USER, amountCollateral);
         collateral.approve(address(dscEngine), amountCollateral);
@@ -53,23 +53,23 @@ contract Handler is Test {
     function mintDsc(uint256 amountDscToMint) public {
         // Get current DSC minted and available collateral value
         (uint256 totalDscMinted, uint256 collateralValueInUsd) = dscEngine.getAccountInformation(USER);
-        
+
         // Calculate max mintable: (collateral value / 2) - already minted
         int256 maxDscToMint = (int256(collateralValueInUsd) / 2) - int256(totalDscMinted);
-        
+
         // Skip if no available capacity
         if (maxDscToMint < 0) {
             return;
         }
-        
+
         // Bound amount to available capacity
         amountDscToMint = bound(amountDscToMint, 0, uint256(maxDscToMint));
-        
+
         // Skip if amount is zero
         if (amountDscToMint == 0) {
             return;
         }
-        
+
         vm.prank(USER);
         dscEngine.mintDsc(amountDscToMint);
     }
@@ -79,15 +79,15 @@ contract Handler is Test {
         ERC20Mock collateral = _getCollateralFromSeed(collateralSeed);
         // Get available collateral balance in protocol
         uint256 maxCollateralToRedeem = collateral.balanceOf(address(dscEngine));
-        
+
         // Skip if no collateral available
         if (maxCollateralToRedeem == 0) {
             return;
         }
-        
+
         // Bound amount to available balance
         amountCollateral = bound(amountCollateral, 1, maxCollateralToRedeem);
-        
+
         vm.prank(USER);
         dscEngine.redeemCollateral(address(collateral), amountCollateral);
     }
@@ -96,15 +96,15 @@ contract Handler is Test {
     function burnDsc(uint256 amountDsc) public {
         // Get user's DSC balance
         uint256 userBalance = dsc.balanceOf(USER);
-        
+
         // Skip if no balance to burn
         if (userBalance == 0) {
             return;
         }
-        
+
         // Bound amount to available balance
         amountDsc = bound(amountDsc, 1, userBalance);
-        
+
         vm.prank(USER);
         dsc.approve(address(dscEngine), amountDsc);
         dscEngine.burnDsc(amountDsc);
