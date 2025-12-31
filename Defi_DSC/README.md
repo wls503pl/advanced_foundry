@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./img/DSC_logo2.png" alt="DSC Logo" width="350"/>
+  <img src="./img/DSC_logo2.png" alt="DSC Logo" width="688"/>
   
   # DSC - Decentralized Stable Coin
   
