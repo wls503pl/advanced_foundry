@@ -1,0 +1,428 @@
+No files changed, compilation skipped
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> src/DSCEngine.sol:83:71
+   |
+83 |     mapping(address tokenAddress => address priceFeedAddress) private s_priceFeeds;
+   |                                                                       ^^^^^^^^^^^^ help: consider using: `sPriceFeeds`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> test/fuzz/OpenInvariantsTest.t.sol:29:13
+   |
+29 |     address wETH;
+   |             ^^^^ help: consider using: `wEth`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> test/fuzz/OpenInvariantsTest.t.sol:30:13
+   |
+30 |     address wBTC;
+   |             ^^^^ help: consider using: `wBtc`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> test/fuzz/OpenInvariantsTest.t.sol:55:17
+   |
+55 |         uint256 totalwETHDeposited = IERC20(wETH).balanceOf(address(dscEngine));
+   |                 ^^^^^^^^^^^^^^^^^^ help: consider using: `totalwEthDeposited`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> test/fuzz/InvariantsTest.t.sol:29:13
+   |
+29 |     address wETH;
+   |             ^^^^ help: consider using: `wEth`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> test/fuzz/InvariantsTest.t.sol:30:13
+   |
+30 |     address wBTC;
+   |             ^^^^ help: consider using: `wBtc`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[screaming-snake-case-const]: constants should use SCREAMING_SNAKE_CASE
+  --> test/mocks/MockV3Aggregator.sol:13:29
+   |
+13 |     uint256 public constant version = 0;
+   |                             ^^^^^^^ help: consider using: `VERSION`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#screaming-snake-case-const
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> test/fuzz/Handler.t.sol:20:13
+   |
+20 |     uint256 MAX_DEPOSIT_SIZE = type(uint96).max;
+   |             ^^^^^^^^^^^^^^^^ help: consider using: `maxDepositSize`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> test/unit/DSCEngineTest.t.sol:31:20
+   |
+31 |     address public USER = makeAddr("user");
+   |                    ^^^^ help: consider using: `user`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> test/fuzz/InvariantsTest.t.sol:58:17
+   |
+58 |         uint256 totalwETHDeposited = IERC20(wETH).balanceOf(address(dscEngine));
+   |                 ^^^^^^^^^^^^^^^^^^ help: consider using: `totalwEthDeposited`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> test/fuzz/OpenInvariantsTest.t.sol:57:17
+   |
+57 |         uint256 totalwBTCDeposited = IERC20(wBTC).balanceOf(address(dscEngine));
+   |                 ^^^^^^^^^^^^^^^^^^ help: consider using: `totalwBtcDeposited`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> test/fuzz/Handler.t.sol:23:13
+   |
+23 |     address USER = address(1);
+   |             ^^^^ help: consider using: `user`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> test/unit/DSCEngineTest.t.sol:32:20
+   |
+32 |     address public LIQUIDATOR = makeAddr("liquidator");
+   |                    ^^^^^^^^^^ help: consider using: `liquidator`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> test/fuzz/InvariantsTest.t.sol:60:17
+   |
+60 |         uint256 totalwBTCDeposited = IERC20(wBTC).balanceOf(address(dscEngine));
+   |                 ^^^^^^^^^^^^^^^^^^ help: consider using: `totalwBtcDeposited`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> test/fuzz/InvariantsTest.t.sol:63:17
+   |
+63 |         uint256 wETHValue = dscEngine.getUsdValue(wETH, totalwETHDeposited);
+   |                 ^^^^^^^^^ help: consider using: `wEthValue`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> test/fuzz/InvariantsTest.t.sol:65:17
+   |
+65 |         uint256 wBTCValue = dscEngine.getUsdValue(wBTC, totalwBTCDeposited);
+   |                 ^^^^^^^^^ help: consider using: `wBtcValue`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> src/DSCEngine.sol:86:93
+   |
+86 |     mapping(address userAddress => mapping(address tokenAddress => uint256 amount)) private s_collateralDeposited;
+   |                                                                                             ^^^^^^^^^^^^^^^^^^^^^ help: consider using: `sCollateralDeposited`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> script/HelperConfig.s.sol:26:17
+   |
+26 |         address wETH_UsdPriceFeed;
+   |                 ^^^^^^^^^^^^^^^^^ help: consider using: `wEthUsdPriceFeed`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> test/fuzz/OpenInvariantsTest.t.sol:60:17
+   |
+60 |         uint256 wETHValue = dscEngine.getUsdValue(wETH, totalwETHDeposited);
+   |                 ^^^^^^^^^ help: consider using: `wEthValue`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[unused-import]: unused imports should be removed
+  --> test/fuzz/InvariantsTest.t.sol:11:15
+   |
+11 | import {Test, console} from "forge-std/Test.sol";
+   |               ^^^^^^^
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#unused-import
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> src/DSCEngine.sol:89:69
+   |
+89 |     mapping(address userAddress => uint256 amountDscMinted) private s_dscMinted;
+   |                                                                     ^^^^^^^^^^^ help: consider using: `sDscMinted`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+warning[unsafe-typecast]: typecasts that can truncate values should be checked
+  --> test/mocks/MockV3Aggregator.sol:61:13
+   |
+61 |             uint80(latestRound),
+   |             ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: consider disabling this lint if you're certain the cast is safe
+           
+           // casting to 'uint80' is safe because [explain why]
+           // forge-lint: disable-next-line(unsafe-typecast)
+           
+           
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#unsafe-typecast
+
+warning[unsafe-typecast]: typecasts that can truncate values should be checked
+  --> test/fuzz/Handler.t.sol:58:32
+   |
+58 |         int256 maxDscToMint = (int256(collateralValueInUsd) / 2) - int256(totalDscMinted);
+   |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: consider disabling this lint if you're certain the cast is safe
+           
+           // casting to 'int256' is safe because [explain why]
+           // forge-lint: disable-next-line(unsafe-typecast)
+           
+           
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#unsafe-typecast
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> src/DSCEngine.sol:92:23
+   |
+92 |     address[] private s_collateralTokens;
+   |                       ^^^^^^^^^^^^^^^^^^ help: consider using: `sCollateralTokens`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> test/fuzz/OpenInvariantsTest.t.sol:62:17
+   |
+62 |         uint256 wBTCValue = dscEngine.getUsdValue(wBTC, totalwBTCDeposited);
+   |                 ^^^^^^^^^ help: consider using: `wBtcValue`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+warning[unsafe-typecast]: typecasts that can truncate values should be checked
+  --> test/mocks/MockV3Aggregator.sol:65:13
+   |
+65 |             uint80(latestRound)
+   |             ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: consider disabling this lint if you're certain the cast is safe
+           
+           // casting to 'uint80' is safe because [explain why]
+           // forge-lint: disable-next-line(unsafe-typecast)
+           
+           
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#unsafe-typecast
+
+warning[unsafe-typecast]: typecasts that can truncate values should be checked
+  --> test/fuzz/Handler.t.sol:58:68
+   |
+58 |         int256 maxDscToMint = (int256(collateralValueInUsd) / 2) - int256(totalDscMinted);
+   |                                                                    ^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: consider disabling this lint if you're certain the cast is safe
+           
+           // casting to 'int256' is safe because [explain why]
+           // forge-lint: disable-next-line(unsafe-typecast)
+           
+           
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#unsafe-typecast
+
+warning[unsafe-typecast]: typecasts that can truncate values should be checked
+  --> test/fuzz/Handler.t.sol:66:53
+   |
+66 |         amountDscToMint = bound(amountDscToMint, 0, uint256(maxDscToMint));
+   |                                                     ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: consider disabling this lint if you're certain the cast is safe
+           
+           // casting to 'uint256' is safe because [explain why]
+           // forge-lint: disable-next-line(unsafe-typecast)
+           
+           
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#unsafe-typecast
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> script/HelperConfig.s.sol:27:17
+   |
+27 |         address wBTC_UsdPriceFeed;
+   |                 ^^^^^^^^^^^^^^^^^ help: consider using: `wBtcUsdPriceFeed`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[unused-import]: unused imports should be removed
+  --> test/fuzz/OpenInvariantsTest.t.sol:11:15
+   |
+11 | import {Test, console} from "forge-std/Test.sol";
+   |               ^^^^^^^
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#unused-import
+
+note[screaming-snake-case-immutable]: immutables should use SCREAMING_SNAKE_CASE
+  --> src/DSCEngine.sol:95:27
+   |
+95 |     DSC private immutable i_dsc;
+   |                           ^^^^^ help: consider using: `I_DSC`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#screaming-snake-case-immutable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> script/HelperConfig.s.sol:28:17
+   |
+28 |         address wETH;
+   |                 ^^^^ help: consider using: `wEth`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> script/HelperConfig.s.sol:29:17
+   |
+29 |         address wBTC;
+   |                 ^^^^ help: consider using: `wBtc`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> script/HelperConfig.s.sol:93:26
+   |
+93 |         MockV3Aggregator wBTC_USDPriceFeed = new MockV3Aggregator(DECIMALS, BTC_USD_PRICE);
+   |                          ^^^^^^^^^^^^^^^^^ help: consider using: `wBtcUsdPriceFeed`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[unwrapped-modifier-logic]: wrap modifier logic to reduce code size
+   --> src/DSCEngine.sol:114:5
+    |
+114 | /     modifier moreThanZero(uint256 amount) {
+115 | |         if (amount <= 0) {
+116 | |             revert DSCEngine__NeedsMoreThanZero();
+...   |
+119 | |     }
+    | |_____^
+    |
+help: wrap modifier logic to reduce code size
+    |
+114 ~     modifier moreThanZero(uint256 amount) {
+115 +         _moreThanZero(amount);
+116 +         _;
+117 +     }
+118 + 
+119 +     function _moreThanZero(uint256 amount) internal {
+120 +         if (amount <= 0) {
+121 +             revert DSCEngine__NeedsMoreThanZero();
+122 +         }
+123 +     }
+    |
+    = help: https://book.getfoundry.sh/reference/forge/forge-lint#unwrapped-modifier-logic
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> script/HelperConfig.s.sol:96:19
+   |
+96 |         ERC20Mock wBTCMock = new ERC20Mock("Wrapped Bitcoin", "WBTC", msg.sender, 1000e8);
+   |                   ^^^^^^^^ help: consider using: `wBtcMock`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+  --> script/HelperConfig.s.sol:99:26
+   |
+99 |         MockV3Aggregator wETH_USDPriceFeed = new MockV3Aggregator(DECIMALS, ETH_USD_PRICE);
+   |                          ^^^^^^^^^^^^^^^^^ help: consider using: `wEthUsdPriceFeed`
+   |
+   = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[mixed-case-variable]: mutable variables should use mixedCase
+   --> script/HelperConfig.s.sol:102:19
+    |
+102 |         ERC20Mock wETHMock = new ERC20Mock("Wrapped Ether", "WETH", msg.sender, 1000e18);
+    |                   ^^^^^^^^ help: consider using: `wEthMock`
+    |
+    = help: https://book.getfoundry.sh/reference/forge/forge-lint#mixed-case-variable
+
+note[unwrapped-modifier-logic]: wrap modifier logic to reduce code size
+   --> src/DSCEngine.sol:127:5
+    |
+127 | /     modifier isAllowedToken(address tokenAddress) {
+128 | |         if (s_priceFeeds[tokenAddress] == address(0)) {
+129 | |             revert DSCEngine__NotAllowedToken();
+...   |
+132 | |     }
+    | |_____^
+    |
+help: wrap modifier logic to reduce code size
+    |
+127 ~     modifier isAllowedToken(address tokenAddress) {
+128 +         _isAllowedToken(tokenAddress);
+129 +         _;
+130 +     }
+131 + 
+132 +     function _isAllowedToken(address tokenAddress) internal {
+133 +         if (s_priceFeeds[tokenAddress] == address(0)) {
+134 +             revert DSCEngine__NotAllowedToken();
+135 +         }
+136 +     }
+    |
+    = help: https://book.getfoundry.sh/reference/forge/forge-lint#unwrapped-modifier-logic
+
+warning[unsafe-typecast]: typecasts that can truncate values should be checked
+   --> src/DSCEngine.sol:364:48
+    |
+364 |         return (usdAmountInWei * PRECISION) / (uint256(price) * ADDITIONAL_FEED_PRECISION);
+    |                                                ^^^^^^^^^^^^^^
+    |
+    = note: consider disabling this lint if you're certain the cast is safe
+            
+            // casting to 'uint256' is safe because [explain why]
+            // forge-lint: disable-next-line(unsafe-typecast)
+            
+            
+    = help: https://book.getfoundry.sh/reference/forge/forge-lint#unsafe-typecast
+
+warning[unsafe-typecast]: typecasts that can truncate values should be checked
+   --> src/DSCEngine.sol:378:17
+    |
+378 |         return (uint256(price) * ADDITIONAL_FEED_PRECISION * amount) / PRECISION;
+    |                 ^^^^^^^^^^^^^^
+    |
+    = note: consider disabling this lint if you're certain the cast is safe
+            
+            // casting to 'uint256' is safe because [explain why]
+            // forge-lint: disable-next-line(unsafe-typecast)
+            
+            
+    = help: https://book.getfoundry.sh/reference/forge/forge-lint#unsafe-typecast
+
+
+Running 1 tests for test/fuzz/InvariantsTest.t.sol:InvariantsTest
+Traceback (most recent call last):
+  File "/home/dayda/.local/bin/halmos", line 6, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/dayda/.local/share/pipx/venvs/halmos/lib/python3.12/site-packages/halmos/__main__.py", line 1947, in main
+    exitcode = _main().exitcode
+               ^^^^^^^
+  File "/home/dayda/.local/share/pipx/venvs/halmos/lib/python3.12/site-packages/halmos/__main__.py", line 1886, in _main
+    test_results = run_contract(contract_ctx)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dayda/.local/share/pipx/venvs/halmos/lib/python3.12/site-packages/halmos/__main__.py", line 1580, in run_contract
+    test_results = run_tests(ctx, setup_ex, ctx.funsigs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dayda/.local/share/pipx/venvs/halmos/lib/python3.12/site-packages/halmos/__main__.py", line 1653, in run_tests
+    print_invariant_targets(ctx, setup_ex)
+  File "/home/dayda/.local/share/pipx/venvs/halmos/lib/python3.12/site-packages/halmos/__main__.py", line 1600, in print_invariant_targets
+    contract_json = BuildOut().get_by_name(contract_name, filename)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dayda/.local/share/pipx/venvs/halmos/lib/python3.12/site-packages/halmos/mapper.py", line 342, in get_by_name
+    raise HalmosException(f"{contract_name} is not found")
+halmos.exceptions.HalmosException: None is not found
