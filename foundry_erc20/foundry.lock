@@ -1,4 +1,13 @@
 {
+  "../Defi_DSC/lib/chainlink-brownie-contracts": {
+    "rev": "67887b84d3add02a25ef4145fc014e2f549509da"
+  },
+  "../foundry_nft/lib/foundry-devops": {
+    "rev": "df9f90b490423578142b5dd50752db9427efb2ac"
+  },
+  "../foundry_nft/lib/openzeppelin-contracts": {
+    "rev": "fcbae5394ae8ad52d8e580a3477db99814b9d565"
+  },
   "lib/forge-std": {
     "tag": {
       "name": "v1.12.0",

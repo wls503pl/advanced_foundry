@@ -1,0 +1,102 @@
+strict digraph {
+rankdir="LR"
+node [shape=box]
+subgraph cluster_2305_DSCEngine {
+label = "DSCEngine"
+"2305_burnDsc" [label="burnDsc"]
+"2305__getAccountInformation" [label="_getAccountInformation"]
+"2305__burnDsc" [label="_burnDsc"]
+"2305_redeemCollateralForDsc" [label="redeemCollateralForDsc"]
+"2305_getTokenAmountFromUsd" [label="getTokenAmountFromUsd"]
+"2305_getUsdValue" [label="getUsdValue"]
+"2305_getPrecision" [label="getPrecision"]
+"2305_getLiquidationBonus" [label="getLiquidationBonus"]
+"2305_getCollateralTokens" [label="getCollateralTokens"]
+"2305_mintDsc" [label="mintDsc"]
+"2305_slitherConstructorConstantVariables" [label="slitherConstructorConstantVariables"]
+"2305_calculateHealthFactor" [label="calculateHealthFactor"]
+"2305_getCollateralTokenPriceFeed" [label="getCollateralTokenPriceFeed"]
+"2305_getMinHealthFactor" [label="getMinHealthFactor"]
+"2305_redeemCollateral" [label="redeemCollateral"]
+"2305__healthFactor" [label="_healthFactor"]
+"2305_getAccountInformation" [label="getAccountInformation"]
+"2305_getCollateralBalanceOfUser" [label="getCollateralBalanceOfUser"]
+"2305__calculateHealthFactor" [label="_calculateHealthFactor"]
+"2305_getHealthFactor" [label="getHealthFactor"]
+"2305_depositCollateralAndMintDsc" [label="depositCollateralAndMintDsc"]
+"2305_getAccountCollateralValue" [label="getAccountCollateralValue"]
+"2305_liquidate" [label="liquidate"]
+"2305_getLiquidationPrecision" [label="getLiquidationPrecision"]
+"2305__redeemCollateral" [label="_redeemCollateral"]
+"2305_getDsc" [label="getDsc"]
+"2305_depositCollateral" [label="depositCollateral"]
+"2305__revertIfHealthFactorIsBroken" [label="_revertIfHealthFactorIsBroken"]
+"2305_getLiquidationThreshold" [label="getLiquidationThreshold"]
+"2305_getAdditionalFeedPrecision" [label="getAdditionalFeedPrecision"]
+"2305_constructor" [label="constructor"]
+"2305_getHealthFactor" -> "2305__healthFactor"
+"2305__healthFactor" -> "2305__getAccountInformation"
+"2305_depositCollateral" -> "2305_nonReentrant"
+"2305_redeemCollateralForDsc" -> "2305_burnDsc"
+"2305_redeemCollateral" -> "2305_moreThanZero"
+"2305_mintDsc" -> "2305_moreThanZero"
+"2305_redeemCollateral" -> "2305__redeemCollateral"
+"2305_liquidate" -> "2305_nonReentrant"
+"2305_getAccountCollateralValue" -> "2305_getUsdValue"
+"2305_calculateHealthFactor" -> "2305__calculateHealthFactor"
+"2305_liquidate" -> "2305__redeemCollateral"
+"2305__revertIfHealthFactorIsBroken" -> "2305__healthFactor"
+"2305_liquidate" -> "2305_moreThanZero"
+"2305_depositCollateral" -> "2305_moreThanZero"
+"2305_depositCollateralAndMintDsc" -> "2305_depositCollateral"
+"2305_burnDsc" -> "2305__burnDsc"
+"2305_depositCollateralAndMintDsc" -> "2305_mintDsc"
+"2305_redeemCollateral" -> "2305__revertIfHealthFactorIsBroken"
+"2305_mintDsc" -> "2305__revertIfHealthFactorIsBroken"
+"2305_burnDsc" -> "2305_moreThanZero"
+"2305__getAccountInformation" -> "2305_getAccountCollateralValue"
+"2305__healthFactor" -> "2305__calculateHealthFactor"
+"2305_liquidate" -> "2305__burnDsc"
+"2305_liquidate" -> "2305_getTokenAmountFromUsd"
+"2305_liquidate" -> "2305__revertIfHealthFactorIsBroken"
+"2305_redeemCollateralForDsc" -> "2305_redeemCollateral"
+"2305_depositCollateral" -> "2305_isAllowedToken"
+"2305_mintDsc" -> "2305_nonReentrant"
+"2305_redeemCollateral" -> "2305_nonReentrant"
+"2305_getAccountInformation" -> "2305__getAccountInformation"
+"2305_liquidate" -> "2305__healthFactor"
+"2305_burnDsc" -> "2305__revertIfHealthFactorIsBroken"
+}subgraph cluster_1138_ReentrancyGuard {
+label = "ReentrancyGuard"
+"1138__reentrancyGuardEntered" [label="_reentrancyGuardEntered"]
+"1138_constructor" [label="constructor"]
+"1138__nonReentrantBeforeView" [label="_nonReentrantBeforeView"]
+"1138__reentrancyGuardStorageSlot" [label="_reentrancyGuardStorageSlot"]
+"1138__nonReentrantAfter" [label="_nonReentrantAfter"]
+"1138__nonReentrantBefore" [label="_nonReentrantBefore"]
+"1138__nonReentrantBefore" -> "1138__nonReentrantBeforeView"
+"1138_constructor" -> "1138__reentrancyGuardStorageSlot"
+"1138__nonReentrantAfter" -> "1138__reentrancyGuardStorageSlot"
+"1138__nonReentrantBeforeView" -> "1138__reentrancyGuardEntered"
+"1138__nonReentrantBefore" -> "1138__reentrancyGuardStorageSlot"
+"1138__reentrancyGuardEntered" -> "1138__reentrancyGuardStorageSlot"
+}subgraph cluster_solidity {
+label = "[Solidity]"
+"revert DSCEngine__AddressLengthOfTokenAndPriceFeedNotMatch()" 
+"revert DSCEngine__HealthFactorOk()" 
+"revert DSCEngine__TransferFailed()" 
+"revert DSCEngine__HealthFactorNotImproved()" 
+"revert DSCEngine__BreaksHealthFactor(uint256)" 
+"revert ReentrancyGuardReentrantCall()" 
+"revert DSCEngine__MintFailed()" 
+"2305__burnDsc" -> "revert DSCEngine__TransferFailed()"
+"2305__redeemCollateral" -> "revert DSCEngine__TransferFailed()"
+"2305_liquidate" -> "revert DSCEngine__HealthFactorOk()"
+"2305_mintDsc" -> "revert DSCEngine__MintFailed()"
+"2305_liquidate" -> "revert DSCEngine__HealthFactorNotImproved()"
+"2305_constructor" -> "revert DSCEngine__AddressLengthOfTokenAndPriceFeedNotMatch()"
+"2305__revertIfHealthFactorIsBroken" -> "revert DSCEngine__BreaksHealthFactor(uint256)"
+"1138__nonReentrantBeforeView" -> "revert ReentrancyGuardReentrantCall()"
+"2305_depositCollateral" -> "revert DSCEngine__TransferFailed()"
+}
+}
